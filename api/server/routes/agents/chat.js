@@ -10,6 +10,10 @@ const {
 } = require('~/server/middleware');
 const { initializeClient } = require('~/server/services/Endpoints/agents');
 const AgentController = require('~/server/controllers/agents/request');
+const {
+  EchoCoPawController,
+  isEchoCoPawRequest,
+} = require('~/server/controllers/agents/echoCoPaw');
 const addTitle = require('~/server/services/Endpoints/agents/title');
 const { getRoleByName } = require('~/models');
 
@@ -33,6 +37,9 @@ router.use(validateConvoAccess);
 router.use(buildEndpointOption);
 
 const controller = async (req, res, next) => {
+  if (isEchoCoPawRequest(req)) {
+    return EchoCoPawController(req, res, next);
+  }
   await AgentController(req, res, next, initializeClient, addTitle);
 };
 
