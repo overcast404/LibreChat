@@ -30,6 +30,8 @@ const NON_TEXT_ASSISTANT_TYPES = new Set([
 
 const DEFAULT_TOOL_NAME = 'Tool';
 const LEGACY_TEXT_MESSAGE_ID = '__echo_copaw_text_delta__';
+const ECHO_COPAW_METADATA_KEY = 'echo_copaw';
+const ECHO_COPAW_SOURCE = 'echo-copaw';
 
 function lower(value) {
   return typeof value === 'string' ? value.toLowerCase() : '';
@@ -185,27 +187,37 @@ function isTextLikeAssistantMessage(msg) {
   return msg.role !== 'user' && !NON_TEXT_ASSISTANT_TYPES.has(lower(msg.type));
 }
 
+function makeEchoMetadata({ phase, kind, label, sourceId, sequence }) {
+  return {
+    source: ECHO_COPAW_SOURCE,
+    phase,
+    kind,
+    ...(label ? { label } : {}),
+    ...(sourceId ? { sourceId } : {}),
+    ...(Number.isInteger(sequence) ? { sequence } : {}),
+  };
+}
+
+function getLastTextLikeAssistantMessageIndex(messages) {
+  let lastIndex = -1;
+  messages.forEach((msg, index) => {
+    if (!isTextLikeAssistantMessage(msg)) {
+      return;
+    }
+    if (!extractPlainTextFromMsg(msg).trim()) {
+      return;
+    }
+    lastIndex = index;
+  });
+  return lastIndex;
+}
+
 function insertAssistantMessage(acc, msg) {
-  if (!isTextLikeAssistantMessage(msg)) {
-    return [...acc, msg];
-  }
-  const hasAssistantText = acc.some(isTextLikeAssistantMessage);
-  if (!hasAssistantText) {
-    return [msg, ...acc];
-  }
   return [...acc, msg];
 }
 
 function normalizeAssistantMessageOrder(messages) {
-  if (messages.length < 2) {
-    return messages;
-  }
-  const firstTextIdx = messages.findIndex(isTextLikeAssistantMessage);
-  if (firstTextIdx <= 0) {
-    return messages;
-  }
-  const firstText = messages[firstTextIdx];
-  return [firstText, ...messages.slice(0, firstTextIdx), ...messages.slice(firstTextIdx + 1)];
+  return messages;
 }
 
 function upsertMessageById(acc, msg) {
@@ -271,22 +283,42 @@ function appendTextDeltaToAcc(acc, msgId, delta) {
   return normalizeAssistantMessageOrder(next);
 }
 
+function replaceTextInAcc(acc, msgId, text) {
+  const idx = acc.findIndex((msg) => msg.id === msgId);
+  if (idx < 0) {
+    return normalizeAssistantMessageOrder(
+      insertAssistantMessage(acc, {
+        id: msgId,
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text }],
+      }),
+    );
+  }
+
+  const next = acc.slice();
+  const current = next[idx];
+  next[idx] = { ...current, content: [{ type: 'text', text }] };
+  return normalizeAssistantMessageOrder(next);
+}
+
 function extractStreamTextChunk(event) {
   if (event?.object === 'content' && event.type === 'text') {
-    const text =
-      typeof event.text === 'string'
-        ? event.text
-        : typeof event.delta === 'string'
-          ? event.delta
-          : typeof event.content === 'string'
-            ? event.content
-            : '';
+    let text = '';
+    if (typeof event.text === 'string') {
+      text = event.text;
+    } else if (typeof event.delta === 'string') {
+      text = event.delta;
+    } else if (typeof event.content === 'string') {
+      text = event.content;
+    }
     const msgId = typeof event.msg_id === 'string' ? event.msg_id : undefined;
-    return text ? { text, msgId } : {};
+    const mode = event.status === 'completed' && event.delta !== true ? 'replace' : 'append';
+    return text ? { text, msgId, mode } : {};
   }
 
   if (typeof event?.text === 'string' && event.text.length > 0) {
-    return { text: event.text };
+    return { text: event.text, mode: 'append' };
   }
 
   return {};
@@ -313,12 +345,12 @@ function appendTextPart(parts, text, extra = {}) {
   });
 }
 
-function appendThinkingPart(parts, text) {
+function appendThinkingPart(parts, text, extra = {}) {
   if (!text) {
     return;
   }
   const previous = parts[parts.length - 1];
-  if (previous?.type === ContentTypes.THINK) {
+  if (previous?.type === ContentTypes.THINK && Object.keys(extra).length === 0) {
     previous[ContentTypes.THINK] = [previous[ContentTypes.THINK], text]
       .filter(Boolean)
       .join('\n\n');
@@ -327,13 +359,12 @@ function appendThinkingPart(parts, text) {
   parts.push({
     type: ContentTypes.THINK,
     [ContentTypes.THINK]: text,
+    ...extra,
   });
 }
 
 function collectDataObjects(msg) {
-  return getContentParts(msg)
-    .map(getDataObject)
-    .filter(Boolean);
+  return getContentParts(msg).map(getDataObject).filter(Boolean);
 }
 
 function extractToolCall(msg, index) {
@@ -374,24 +405,26 @@ function extractToolResult(msg, index) {
   };
 }
 
-function makeToolAnchor(toolCall) {
+function makeToolAnchor(toolCall, extra = {}) {
   return {
     type: ContentTypes.TEXT,
     [ContentTypes.TEXT]: '',
     tool_call_ids: [toolCall.id],
+    ...extra,
   };
 }
 
-function makeToolPart(toolCall) {
+function makeToolPart(toolCall, extra = {}) {
   return {
     type: ContentTypes.TOOL_CALL,
     [ContentTypes.TOOL_CALL]: toolCall,
+    ...extra,
   };
 }
 
-function appendToolCall(parts, toolCall, pending) {
-  parts.push(makeToolAnchor(toolCall));
-  parts.push(makeToolPart(toolCall));
+function appendToolCall(parts, toolCall, pending, extra = {}) {
+  parts.push(makeToolAnchor(toolCall, extra));
+  parts.push(makeToolPart(toolCall, extra));
 
   const toolPartIndex = parts.length - 1;
   pending.byId.set(toolCall.id, toolPartIndex);
@@ -434,7 +467,7 @@ function takePendingToolIndex(result, pending) {
   return null;
 }
 
-function completeToolCall(parts, result, pending) {
+function completeToolCall(parts, result, pending, extra = {}) {
   const index = takePendingToolIndex(result, { ...pending, parts });
   if (index == null) {
     const toolCall = {
@@ -445,24 +478,30 @@ function completeToolCall(parts, result, pending) {
       type: ToolCallTypes.TOOL_CALL,
       progress: 1,
     };
-    parts.push(makeToolAnchor(toolCall));
-    parts.push(makeToolPart(toolCall));
+    parts.push(makeToolAnchor(toolCall, extra));
+    parts.push(makeToolPart(toolCall, extra));
     return;
   }
 
+  const existingPart = parts[index] ?? {};
   const existing = parts[index]?.[ContentTypes.TOOL_CALL] ?? {};
-  parts[index] = makeToolPart({
-    ...existing,
-    id: existing.id ?? result.id,
-    name: existing.name ?? result.name,
-    output: result.output,
-    type: ToolCallTypes.TOOL_CALL,
-    progress: 1,
-  });
+  const existingEchoMetadata = existingPart[ECHO_COPAW_METADATA_KEY];
+  parts[index] = makeToolPart(
+    {
+      ...existing,
+      id: existing.id ?? result.id,
+      name: existing.name ?? result.name,
+      output: result.output,
+      type: ToolCallTypes.TOOL_CALL,
+      progress: 1,
+    },
+    existingEchoMetadata ? { [ECHO_COPAW_METADATA_KEY]: existingEchoMetadata } : extra,
+  );
 }
 
 function buildContentPartsFromEchoMessages(rawMessages) {
   const messages = normalizeAssistantMessageOrder(rawMessages.map(normalizeEchoMessage));
+  const answerMessageIndex = getLastTextLikeAssistantMessageIndex(messages);
   const parts = [];
   const pending = {
     byId: new Map(),
@@ -477,24 +516,64 @@ function buildContentPartsFromEchoMessages(rawMessages) {
 
     const type = lower(msg.type);
     if (THINKING_TYPES.has(type)) {
-      appendThinkingPart(parts, extractPlainTextFromMsg(msg).trim());
+      appendThinkingPart(parts, extractPlainTextFromMsg(msg).trim(), {
+        [ECHO_COPAW_METADATA_KEY]: makeEchoMetadata({
+          phase: 'process',
+          kind: 'reasoning',
+          label: '推理过程',
+          sourceId: msg.id,
+          sequence: index,
+        }),
+      });
       return;
     }
 
     if (TOOL_CALL_TYPES.has(type)) {
-      appendToolCall(parts, extractToolCall(msg, index), pending);
+      const toolCall = extractToolCall(msg, index);
+      appendToolCall(parts, toolCall, pending, {
+        [ECHO_COPAW_METADATA_KEY]: makeEchoMetadata({
+          phase: 'process',
+          kind: 'tool_call',
+          label: toolCall.name,
+          sourceId: msg.id,
+          sequence: index,
+        }),
+      });
       return;
     }
 
     if (TOOL_RESULT_TYPES.has(type)) {
-      completeToolCall(parts, extractToolResult(msg, index), pending);
+      const result = extractToolResult(msg, index);
+      completeToolCall(parts, result, pending, {
+        [ECHO_COPAW_METADATA_KEY]: makeEchoMetadata({
+          phase: 'process',
+          kind: 'tool_call',
+          label: result.name,
+          sourceId: msg.id,
+          sequence: index,
+        }),
+      });
       return;
     }
 
-    appendTextPart(parts, extractPlainTextFromMsg(msg));
+    const text = extractPlainTextFromMsg(msg);
+    const phase = index === answerMessageIndex ? 'answer' : 'narrative';
+    appendTextPart(parts, text, {
+      [ECHO_COPAW_METADATA_KEY]: makeEchoMetadata({
+        phase,
+        kind: 'message',
+        label: phase === 'answer' ? '最终回答' : undefined,
+        sourceId: msg.id,
+        sequence: index,
+      }),
+    });
   });
 
   return parts;
+}
+
+function buildLiveContentPartsFromEchoMessages(rawMessages) {
+  return buildContentPartsFromEchoMessages(rawMessages);
 }
 
 function parseSSELine(line) {
@@ -532,9 +611,12 @@ class EchoCoPawContentAccumulator {
       changed = true;
     }
 
-    const { text, msgId } = extractStreamTextChunk(event);
+    const { text, msgId, mode } = extractStreamTextChunk(event);
     if (text) {
-      this.messages = appendTextDeltaToAcc(this.messages, msgId ?? LEGACY_TEXT_MESSAGE_ID, text);
+      this.messages =
+        mode === 'replace'
+          ? replaceTextInAcc(this.messages, msgId ?? LEGACY_TEXT_MESSAGE_ID, text)
+          : appendTextDeltaToAcc(this.messages, msgId ?? LEGACY_TEXT_MESSAGE_ID, text);
       changed = true;
     }
 
@@ -553,18 +635,25 @@ class EchoCoPawContentAccumulator {
     return buildContentPartsFromEchoMessages(this.messages);
   }
 
+  getLiveContentParts() {
+    return buildLiveContentPartsFromEchoMessages(this.messages);
+  }
+
   getSnapshot() {
     return {
       messages: this.getMessages(),
       content: this.getContentParts(),
+      liveContent: this.getLiveContentParts(),
     };
   }
 }
 
 module.exports = {
   EchoCoPawContentAccumulator,
+  ECHO_COPAW_METADATA_KEY,
   appendTextDeltaToAcc,
   buildContentPartsFromEchoMessages,
+  buildLiveContentPartsFromEchoMessages,
   extractStreamTextChunk,
   mergeStreamAccumulated,
   normalizeEchoMessage,

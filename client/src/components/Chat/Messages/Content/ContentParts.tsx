@@ -1,4 +1,6 @@
-import { memo, useRef, useMemo, useCallback } from 'react';
+import { memo, useRef, useMemo, useCallback, useState } from 'react';
+import type { ReactNode } from 'react';
+import { CheckCircle2, ChevronDown } from 'lucide-react';
 import { ContentTypes } from 'librechat-data-provider';
 import type {
   TMessageContentParts,
@@ -8,17 +10,54 @@ import type {
 } from 'librechat-data-provider';
 import type { ToolCallGroupExpansionState } from './ToolCallGroup';
 import { ParallelContentRenderer, type PartWithIndex } from './ParallelContent';
-import { mapAttachments, groupSequentialToolCalls } from '~/utils';
+import { cn, mapAttachments, groupSequentialToolCalls } from '~/utils';
 import { MessageContext, SearchContext } from '~/Providers';
 import PendingSkillCall from './Parts/PendingSkillCall';
 import { EditTextPart, EmptyText } from './Parts';
 import MemoryArtifacts from './MemoryArtifacts';
+import EchoThoughtBlock, { getEchoCoPawPhase, isEchoCoPawPart } from './EchoThoughtBlock';
 import ToolCallGroup from './ToolCallGroup';
 import Container from './Container';
 import Part from './Part';
+import { useExpandCollapse } from '~/hooks';
 
 const getToolCallId = (part: TMessageContentParts): string =>
   (part?.[ContentTypes.TOOL_CALL] as Agents.ToolCall | undefined)?.id ?? '';
+
+const isToolAnchorPart = (part: TMessageContentParts): boolean =>
+  part.type === ContentTypes.TEXT && part.tool_call_ids != null;
+
+const ECHO_HISTORY_TITLE = '前置过程';
+const ECHO_HISTORY_SUMMARY_SUFFIX = '段已折叠';
+
+const normalizeEchoIdentifier = (value?: string | null): string =>
+  String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+
+const isEchoCoPawIdentifier = (value?: string | null): boolean => {
+  const normalized = normalizeEchoIdentifier(value);
+  return normalized.includes('qwenpaw') || normalized.includes('echocopaw');
+};
+
+const isEchoCoPawMessage = (endpoint?: string | null, model?: string | null): boolean =>
+  isEchoCoPawIdentifier(endpoint) || isEchoCoPawIdentifier(model);
+
+const isEchoProcessPart = (part: TMessageContentParts, hasEchoContent: boolean): boolean => {
+  const phase = getEchoCoPawPhase(part);
+  if (phase === 'process') {
+    return true;
+  }
+  if (!hasEchoContent) {
+    return false;
+  }
+  return (
+    part.type === ContentTypes.THINK ||
+    part.type === ContentTypes.TOOL_CALL ||
+    isToolAnchorPart(part)
+  );
+};
 
 const getToolGroupId = (parts: PartWithIndex[], fallbackScope: number): string => {
   const firstPart = parts[0];
@@ -31,6 +70,20 @@ const getToolGroupId = (parts: PartWithIndex[], fallbackScope: number): string =
   }
   return `fallback:${fallbackScope}:${firstPart.idx}`;
 };
+
+type EchoRenderItem =
+  | {
+      type: 'process';
+      key: string;
+      parts: PartWithIndex[];
+      hasFollowingContent: boolean;
+    }
+  | {
+      type: 'part';
+      key: string;
+      part: TMessageContentParts;
+      idx: number;
+    };
 
 type PartWithContextProps = {
   part: TMessageContentParts;
@@ -47,6 +100,42 @@ type PartWithContextProps = {
   hideAttachments?: boolean;
   onToolExpand?: () => void;
 };
+
+function EchoHistoryCollapse({ children, itemCount }: { children: ReactNode; itemCount: number }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const { style, ref } = useExpandCollapse(isExpanded);
+  const handleToggle = useCallback(() => setIsExpanded((prev) => !prev), []);
+
+  return (
+    <div className="mb-2 mt-1">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 py-1 text-left text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
+        onClick={handleToggle}
+        aria-expanded={isExpanded}
+      >
+        <CheckCircle2 className="size-4 shrink-0 text-text-secondary" aria-hidden="true" />
+        <span className="shrink-0 text-sm font-medium">{ECHO_HISTORY_TITLE}</span>
+        <span className="min-w-0 flex-1 truncate text-sm font-normal text-text-secondary">
+          {itemCount}
+          {ECHO_HISTORY_SUMMARY_SUFFIX}
+        </span>
+        <ChevronDown
+          className={cn(
+            'size-4 shrink-0 transition-transform duration-200 ease-out',
+            isExpanded && 'rotate-180',
+          )}
+          aria-hidden="true"
+        />
+      </button>
+      <div style={style} aria-hidden={!isExpanded}>
+        <div className="overflow-hidden" ref={ref}>
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 const PartWithContext = memo(function PartWithContext({
   part,
@@ -105,6 +194,8 @@ type ContentPartsProps = {
    * the full message object) so `React.memo` stays shallow-happy.
    */
   manualSkills?: string[];
+  endpoint?: string | null;
+  model?: string | null;
   /** ISO timestamp of the parent message, surfaced in parallel column headers. */
   createdAt?: string | null;
   conversationId?: string | null;
@@ -134,6 +225,8 @@ const ContentParts = memo(function ContentParts({
   isLast,
   content,
   manualSkills,
+  endpoint,
+  model,
   messageId,
   enterEdit,
   siblingIdx,
@@ -319,6 +412,90 @@ const ContentParts = memo(function ContentParts({
     [sequentialParts, attachmentMap, fallbackScope],
   );
 
+  const safeContent = useMemo(() => content ?? [], [content]);
+  const showEmptyCursor = safeContent.length === 0 && effectiveIsSubmitting;
+  const lastContentIdx = safeContent.length - 1;
+  const hasEchoContent =
+    isEchoCoPawMessage(endpoint, model) || safeContent.some((part) => isEchoCoPawPart(part));
+  const echoRenderItems = useMemo<EchoRenderItem[]>(() => {
+    const items: EchoRenderItem[] = [];
+    let processParts: PartWithIndex[] = [];
+    let processGroupCount = 0;
+
+    const flushProcessParts = (hasFollowingContent: boolean) => {
+      if (processParts.length === 0) {
+        return;
+      }
+      const firstIdx = processParts[0]?.idx ?? processGroupCount;
+      items.push({
+        type: 'process',
+        key: `echo-process-${processGroupCount}-${firstIdx}`,
+        parts: processParts,
+        hasFollowingContent,
+      });
+      processParts = [];
+      processGroupCount += 1;
+    };
+
+    safeContent.forEach((part, idx) => {
+      if (!part) {
+        return;
+      }
+      if (isEchoProcessPart(part, hasEchoContent)) {
+        processParts.push({ part, idx });
+        return;
+      }
+
+      flushProcessParts(true);
+      items.push({ type: 'part', key: `echo-part-${idx}`, part, idx });
+    });
+
+    flushProcessParts(false);
+    return items;
+  }, [safeContent, hasEchoContent]);
+  const echoVisiblePartIndexes = useMemo(
+    () =>
+      echoRenderItems.flatMap((item) => {
+        if (item.type !== 'part') {
+          return [];
+        }
+        return [item.idx];
+      }),
+    [echoRenderItems],
+  );
+  const echoLastVisiblePartIdx =
+    echoVisiblePartIndexes[echoVisiblePartIndexes.length - 1] ?? lastContentIdx;
+
+  const finalAnswerRenderIndex = useMemo(() => {
+    if (effectiveIsSubmitting) {
+      return -1;
+    }
+    return echoRenderItems.findIndex(
+      (item) => item.type === 'part' && getEchoCoPawPhase(item.part) === 'answer',
+    );
+  }, [echoRenderItems, effectiveIsSubmitting]);
+  const shouldCollapseEchoHistory = finalAnswerRenderIndex > 0;
+  const echoHistoryItems = shouldCollapseEchoHistory
+    ? echoRenderItems.slice(0, finalAnswerRenderIndex)
+    : [];
+  const echoMainItems = shouldCollapseEchoHistory
+    ? echoRenderItems.slice(finalAnswerRenderIndex)
+    : echoRenderItems;
+
+  const renderEchoItem = useCallback(
+    (item: EchoRenderItem) => {
+      if (item.type === 'process') {
+        const isActiveProcess = !item.hasFollowingContent && effectiveIsSubmitting;
+        return (
+          <EchoThoughtBlock key={item.key} parts={item.parts} isSubmitting={isActiveProcess} />
+        );
+      }
+
+      return renderPart(item.part, item.idx, item.idx === echoLastVisiblePartIdx);
+    },
+    [echoLastVisiblePartIdx, effectiveIsSubmitting, renderPart],
+  );
+
   // Early return: no content to render AND no pending skill cards
   if (!content && !hasPendingSkills) {
     return null;
@@ -365,9 +542,25 @@ const ContentParts = memo(function ContentParts({
     );
   }
 
-  const safeContent = content ?? [];
-  const showEmptyCursor = safeContent.length === 0 && effectiveIsSubmitting;
-  const lastContentIdx = safeContent.length - 1;
+  if (hasEchoContent) {
+    return (
+      <SearchContext.Provider value={{ searchResults }}>
+        <MemoryArtifacts attachments={attachments} />
+        {renderPendingSkills()}
+        {showEmptyCursor && echoRenderItems.length === 0 && (
+          <Container>
+            <EmptyText />
+          </Container>
+        )}
+        {shouldCollapseEchoHistory && (
+          <EchoHistoryCollapse itemCount={echoHistoryItems.length}>
+            {echoHistoryItems.map(renderEchoItem)}
+          </EchoHistoryCollapse>
+        )}
+        {echoMainItems.map(renderEchoItem)}
+      </SearchContext.Provider>
+    );
+  }
 
   // Parallel content: use dedicated renderer with columns (TMessageContentParts includes ContentMetadata)
   const hasParallelContent = safeContent.some((part) => part?.groupId != null);

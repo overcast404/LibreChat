@@ -19,6 +19,7 @@ const { logViolation } = require('~/cache');
 const { saveMessage, saveConvo, getMessages } = require('~/models');
 const {
   EchoCoPawContentAccumulator,
+  ECHO_COPAW_METADATA_KEY,
   buildEchoCoPawPayload,
   iterEchoCoPawEvents,
   resolveEchoCoPawBaseURL,
@@ -37,10 +38,7 @@ function getEchoEndpointNames() {
   if (!configured) {
     return DEFAULT_ECHO_ENDPOINTS;
   }
-  return configured
-    .split(',')
-    .map(normalizeName)
-    .filter(Boolean);
+  return configured.split(',').map(normalizeName).filter(Boolean);
 }
 
 function isEchoCoPawRequest(req) {
@@ -145,6 +143,19 @@ function getEchoEventError(event) {
   }
 
   return null;
+}
+
+function getEchoContentPhase(part) {
+  const metadata = part?.[ECHO_COPAW_METADATA_KEY];
+  return metadata?.source === 'echo-copaw' ? metadata.phase : null;
+}
+
+function getEchoAnswerContent(contentParts) {
+  const hasEchoAnswer = contentParts.some((part) => getEchoContentPhase(part) === 'answer');
+  if (!hasEchoAnswer) {
+    return contentParts;
+  }
+  return contentParts.filter((part) => getEchoContentPhase(part) === 'answer');
 }
 
 async function emitContentSnapshot({
@@ -258,12 +269,13 @@ async function runEchoCoPawGeneration({
       streamId,
       conversationId,
       messageId: responseMessageId,
-      contentParts,
+      contentParts: snapshot.liveContent ?? snapshot.content,
       emittedParts,
     });
   }
 
   const finalContent = contentParts.filter(Boolean);
+  const answerContent = getEchoAnswerContent(finalContent);
   const responseMessage = {
     messageId: responseMessageId,
     conversationId,
@@ -272,7 +284,7 @@ async function runEchoCoPawGeneration({
     endpoint: endpointOption.endpoint,
     model,
     iconURL: endpointOption.iconURL,
-    text: parseTextParts(finalContent, true),
+    text: parseTextParts(answerContent, true),
     content: finalContent,
     unfinished: false,
     error: false,

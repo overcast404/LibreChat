@@ -2944,6 +2944,15 @@ html {
   animation: shimmer 4s linear infinite;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .shimmer,
+  .dark .shimmer {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: none;
+  }
+}
+
 .custom-style-2 {
   padding: 12px;
 }

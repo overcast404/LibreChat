@@ -151,6 +151,8 @@ export default function Message(props: TMessageProps) {
                     manualSkills={message.manualSkills}
                     messageId={message.messageId}
                     setSiblingIdx={setSiblingIdx}
+                    endpoint={message.endpoint ?? conversation?.endpoint}
+                    model={message.model ?? conversation?.model}
                     isCreatedByUser={message.isCreatedByUser}
                     conversationId={conversation?.conversationId}
                     isLatestMessage={messageId === latestMessageId}

@@ -4,9 +4,16 @@ import { ContentTypes } from 'librechat-data-provider';
 import type { TMessageContentParts } from 'librechat-data-provider';
 
 jest.mock('~/utils', () => ({
+  cn: (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' '),
+  getToolDisplayLabel: (name: string) => name,
   mapAttachments: () => ({}),
   groupSequentialToolCalls: (parts: Array<{ part: unknown; idx: number }>) =>
     parts.map((p) => ({ type: 'single' as const, part: p })),
+}));
+
+jest.mock('~/hooks', () => ({
+  useExpandCollapse: () => ({ style: {}, ref: jest.fn() }),
+  useLocalize: () => (key: string) => key,
 }));
 
 jest.mock('~/Providers', () => ({
@@ -136,5 +143,117 @@ describe('ContentParts — interim skill cards', () => {
     expect(skillCard).toBeTruthy();
     expect(textPart).toBeTruthy();
     expect(skillCard.compareDocumentPosition(textPart)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+});
+
+describe('ContentParts — Echo process activity', () => {
+  const echoMetadata = (phase: 'process' | 'narrative' | 'answer', kind = 'message') => ({
+    echo_copaw: {
+      source: 'echo-copaw',
+      phase,
+      kind,
+    },
+  });
+
+  const echoProcessContent: TMessageContentParts[] = [
+    {
+      type: ContentTypes.THINK,
+      think: 'I need to inspect the available skills first.',
+    } as unknown as TMessageContentParts,
+    {
+      type: ContentTypes.TOOL_CALL,
+      [ContentTypes.TOOL_CALL]: {
+        id: 'call-1',
+        name: 'read_file',
+        args: '{"path":"SKILL.md"}',
+      },
+    } as unknown as TMessageContentParts,
+  ];
+
+  it('renders untagged QwenPaw process parts as one live activity row', () => {
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting
+        isLatestMessage
+        content={echoProcessContent}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /调用 read_file/ })).toBeTruthy();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
+    expect(screen.queryByTestId('empty-text')).toBeNull();
+  });
+
+  it('collapses completed QwenPaw process parts before body text', () => {
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting
+        isLatestMessage
+        content={[
+          ...echoProcessContent,
+          { type: ContentTypes.TEXT, text: '好的，先随机选择 cycle。' } as TMessageContentParts,
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /思考完毕.*2 个步骤/ })).toBeTruthy();
+    expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
+  });
+
+  it('keeps untagged process parts on non-Echo endpoints in the default renderer', () => {
+    render(<ContentParts {...baseProps} endpoint="openAI" content={echoProcessContent} />);
+
+    expect(screen.getByTestId(`real-part-${ContentTypes.THINK}`)).toBeTruthy();
+    expect(screen.getByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeTruthy();
+  });
+
+  it('keeps completed Echo thinking and tool output folded before the final answer', () => {
+    const completedEchoContent: TMessageContentParts[] = [
+      {
+        type: ContentTypes.THINK,
+        think: 'Need to inspect data before answering.',
+        ...echoMetadata('process', 'reasoning'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TOOL_CALL,
+        [ContentTypes.TOOL_CALL]: {
+          id: 'call-1',
+          name: 'lookup',
+          args: '{"line":"A"}',
+          output: '{"ok":true}',
+          progress: 1,
+        },
+        ...echoMetadata('process', 'tool_call'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TEXT,
+        text: 'Final answer.',
+        ...echoMetadata('answer'),
+      } as unknown as TMessageContentParts,
+    ];
+
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting={false}
+        isLatestMessage={false}
+        content={completedEchoContent}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /前置过程.*1段已折叠/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /思考完毕.*2 个步骤/, hidden: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /调用 lookup.*完成/, hidden: true })).toBeTruthy();
+    expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ const { formatAgentMessages } = require('../../../app/clients/prompts/formatMess
 const {
   EchoCoPawContentAccumulator,
   buildContentPartsFromEchoMessages,
+  buildLiveContentPartsFromEchoMessages,
   normalizeToolOutputToString,
   parseSSELine,
 } = require('./contentParts');
@@ -15,6 +16,10 @@ function visibleParts(parts) {
 
 function toolCallPart(part) {
   return part[ContentTypes.TOOL_CALL];
+}
+
+function echoMeta(part) {
+  return part.echo_copaw;
 }
 
 describe('EchoCoPaw content part adapter', () => {
@@ -85,6 +90,16 @@ describe('EchoCoPaw content part adapter', () => {
       progress: 1,
       type: ToolCallTypes.TOOL_CALL,
     });
+    expect(echoMeta(content[0])).toMatchObject({
+      source: 'echo-copaw',
+      phase: 'narrative',
+      kind: 'message',
+    });
+    expect(echoMeta(content[3])).toMatchObject({
+      source: 'echo-copaw',
+      phase: 'answer',
+      kind: 'message',
+    });
   });
 
   it('keeps thinking parts before following tool calls', () => {
@@ -104,9 +119,14 @@ describe('EchoCoPaw content part adapter', () => {
       },
     ]);
 
-    expect(content[0]).toEqual({
+    expect(content[0]).toMatchObject({
       type: ContentTypes.THINK,
       think: '需要先查询。',
+    });
+    expect(echoMeta(content[0])).toMatchObject({
+      source: 'echo-copaw',
+      phase: 'process',
+      kind: 'reasoning',
     });
     expect(visibleParts(content).map((part) => part.type)).toEqual([
       ContentTypes.THINK,
@@ -151,15 +171,20 @@ describe('EchoCoPaw content part adapter', () => {
       },
     ]);
 
-    expect(content[0]).toEqual({
-      type: ContentTypes.TEXT,
-      text: '完成。',
-    });
-    expect(content[1]).toEqual({
+    expect(content[0]).toMatchObject({
       type: ContentTypes.THINK,
       think: '需要查询。',
     });
-    expect(toolCallPart(content[3])).toMatchObject({
+    expect(content[3]).toMatchObject({
+      type: ContentTypes.TEXT,
+      text: '完成。',
+    });
+    expect(echoMeta(content[3])).toMatchObject({
+      source: 'echo-copaw',
+      phase: 'answer',
+      kind: 'message',
+    });
+    expect(toolCallPart(content[2])).toMatchObject({
       id: 'call-1',
       name: 'lookup',
       args: '{"q":"abc"}',
@@ -176,6 +201,14 @@ describe('EchoCoPaw content part adapter', () => {
       content: 'llo',
     });
     expect(snapshot.content[0].text).toBe('hello');
+    const replaced = acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      status: 'completed',
+      msg_id: 'm1',
+      text: 'hello',
+    });
+    expect(replaced.content[0].text).toBe('hello');
   });
 
   it('accumulates AgentScope msg_id text deltas around tools', () => {
@@ -229,6 +262,142 @@ describe('EchoCoPaw content part adapter', () => {
     expect(visible[2].text).toBe(' After tool.');
   });
 
+  it('streams full process parts so the frontend can rotate collapsed steps', () => {
+    const messages = [
+      {
+        id: 'think-1',
+        role: 'assistant',
+        type: 'reasoning',
+        content: [{ type: 'text', text: '需要先读取技能。' }],
+      },
+      {
+        id: 'call-1',
+        role: 'assistant',
+        type: 'plugin_call',
+        content: [
+          { type: 'text', data: { name: 'read_file', call_id: 'call-1', arguments: '{}' } },
+        ],
+      },
+      {
+        id: 'result-1',
+        role: 'tool',
+        type: 'plugin_call_output',
+        content: [{ type: 'text', data: { name: 'read_file', call_id: 'call-1', output: 'ok' } }],
+      },
+      {
+        id: 'answer-1',
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text: '好的，我来执行。' }],
+      },
+    ];
+
+    const full = visibleParts(buildContentPartsFromEchoMessages(messages));
+    expect(full.map((part) => part.type)).toEqual([
+      ContentTypes.THINK,
+      ContentTypes.TOOL_CALL,
+      ContentTypes.TEXT,
+    ]);
+
+    const live = visibleParts(buildLiveContentPartsFromEchoMessages(messages));
+    expect(live.map((part) => `${part.type}:${echoMeta(part)?.phase}`)).toEqual([
+      'think:process',
+      'tool_call:process',
+      'text:answer',
+    ]);
+    expect(toolCallPart(live[1])).toMatchObject({
+      name: 'read_file',
+      output: 'ok',
+      progress: 1,
+    });
+    expect(live[2]).toMatchObject({
+      type: ContentTypes.TEXT,
+      text: '好的，我来执行。',
+      echo_copaw: {
+        phase: 'answer',
+      },
+    });
+  });
+
+  it('keeps narrative text visible between live process groups', () => {
+    const messages = [
+      {
+        id: 'think-1',
+        role: 'assistant',
+        type: 'reasoning',
+        content: [{ type: 'text', text: '先判断任务。' }],
+      },
+      {
+        id: 'message-1',
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text: '让我先加载技能。' }],
+      },
+      {
+        id: 'call-1',
+        role: 'assistant',
+        type: 'plugin_call',
+        content: [
+          { type: 'text', data: { name: 'read_file', call_id: 'call-1', arguments: '{}' } },
+        ],
+      },
+      {
+        id: 'result-1',
+        role: 'tool',
+        type: 'plugin_call_output',
+        content: [{ type: 'text', data: { name: 'read_file', call_id: 'call-1', output: 'ok' } }],
+      },
+      {
+        id: 'message-2',
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text: '好的，先随机找出 cycle。' }],
+      },
+      {
+        id: 'call-2',
+        role: 'assistant',
+        type: 'plugin_call',
+        content: [
+          {
+            type: 'text',
+            data: { name: 'execute_shell_command', call_id: 'call-2', arguments: '{}' },
+          },
+        ],
+      },
+      {
+        id: 'message-3',
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text: '2 月已随机选出。' }],
+      },
+    ];
+
+    const full = visibleParts(buildContentPartsFromEchoMessages(messages));
+    expect(full.map((part) => `${part.type}:${echoMeta(part)?.phase}`)).toEqual([
+      'think:process',
+      'text:narrative',
+      'tool_call:process',
+      'text:narrative',
+      'tool_call:process',
+      'text:answer',
+    ]);
+
+    const live = visibleParts(buildLiveContentPartsFromEchoMessages(messages));
+    expect(live.map((part) => `${part.type}:${echoMeta(part)?.phase}`)).toEqual([
+      'think:process',
+      'text:narrative',
+      'tool_call:process',
+      'text:narrative',
+      'tool_call:process',
+      'text:answer',
+    ]);
+    expect(live[1].text).toBe('让我先加载技能。');
+    expect(toolCallPart(live[2]).name).toBe('read_file');
+    expect(live[3].text).toBe('好的，先随机找出 cycle。');
+    expect(toolCallPart(live[4]).name).toBe('execute_shell_command');
+    expect(live[5].text).toBe('2 月已随机选出。');
+  });
+
   it('replaces accumulated state when a response.output snapshot arrives', () => {
     const acc = new EchoCoPawContentAccumulator();
     acc.appendEvent({ object: 'content', type: 'text', text: 'legacy text' });
@@ -244,7 +413,12 @@ describe('EchoCoPaw content part adapter', () => {
       ],
     });
 
-    expect(snapshot.content).toEqual([{ type: ContentTypes.TEXT, text: 'final text' }]);
+    expect(snapshot.content).toMatchObject([{ type: ContentTypes.TEXT, text: 'final text' }]);
+    expect(echoMeta(snapshot.content[0])).toMatchObject({
+      source: 'echo-copaw',
+      phase: 'answer',
+      kind: 'message',
+    });
   });
 
   it('creates LibreChat history-compatible tool anchors', () => {

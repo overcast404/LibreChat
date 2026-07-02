@@ -60,6 +60,33 @@ type MessageDeltaUpdate = { type: ContentTypes.TEXT; text: string; tool_call_ids
 
 type ReasoningDeltaUpdate = { type: ContentTypes.THINK; think: string };
 
+const ECHO_COPAW_METADATA_KEY = 'echo_copaw';
+
+function getEchoCoPawMetadata(...sources: unknown[]): unknown {
+  for (const source of sources) {
+    if (!source || typeof source !== 'object') {
+      continue;
+    }
+    const metadata = (source as Record<string, unknown>)[ECHO_COPAW_METADATA_KEY];
+    if (metadata && typeof metadata === 'object') {
+      return metadata;
+    }
+  }
+  return undefined;
+}
+
+function preserveEchoCoPawMetadata<T extends Record<string, unknown>>(
+  target: T,
+  incoming?: unknown,
+  existing?: unknown,
+): T {
+  const metadata = getEchoCoPawMetadata(incoming, existing);
+  if (metadata) {
+    (target as Record<string, unknown>)[ECHO_COPAW_METADATA_KEY] = metadata;
+  }
+  return target;
+}
+
 type AllContentTypes =
   | ContentTypes.TEXT
   | ContentTypes.THINK
@@ -361,10 +388,14 @@ export default function useStepHandler({
       typeof contentPart.text === 'string'
     ) {
       const currentContent = updatedContent[index] as MessageDeltaUpdate;
-      const update: MessageDeltaUpdate = {
-        type: ContentTypes.TEXT,
-        text: (currentContent.text || '') + contentPart.text,
-      };
+      const update = preserveEchoCoPawMetadata(
+        {
+          type: ContentTypes.TEXT,
+          text: (currentContent.text || '') + contentPart.text,
+        },
+        contentPart,
+        currentContent,
+      ) as MessageDeltaUpdate;
 
       if ('tool_call_ids' in contentPart && contentPart.tool_call_ids != null) {
         update.tool_call_ids = contentPart.tool_call_ids;
@@ -387,10 +418,14 @@ export default function useStepHandler({
       typeof contentPart.think === 'string'
     ) {
       const currentContent = updatedContent[index] as ReasoningDeltaUpdate;
-      const update: ReasoningDeltaUpdate = {
-        type: ContentTypes.THINK,
-        think: (currentContent.think || '') + contentPart.think,
-      };
+      const update = preserveEchoCoPawMetadata(
+        {
+          type: ContentTypes.THINK,
+          think: (currentContent.think || '') + contentPart.think,
+        },
+        contentPart,
+        currentContent,
+      ) as ReasoningDeltaUpdate;
 
       updatedContent[index] = update;
     } else if (contentType === ContentTypes.IMAGE_URL && 'image_url' in contentPart) {
@@ -441,10 +476,14 @@ export default function useStepHandler({
         newToolCall.output = contentPart.tool_call.output;
       }
 
-      updatedContent[index] = {
-        type: ContentTypes.TOOL_CALL,
-        tool_call: newToolCall,
-      };
+      updatedContent[index] = preserveEchoCoPawMetadata(
+        {
+          type: ContentTypes.TOOL_CALL,
+          tool_call: newToolCall,
+        },
+        contentPart,
+        existingContent,
+      ) as Agents.ToolCallContent;
     }
 
     // Apply metadata to the content part for parallel rendering
