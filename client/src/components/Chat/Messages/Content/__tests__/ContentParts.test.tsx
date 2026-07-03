@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { ContentTypes } from 'librechat-data-provider';
 import type { TMessageContentParts } from 'librechat-data-provider';
 
@@ -12,7 +12,14 @@ jest.mock('~/utils', () => ({
 }));
 
 jest.mock('~/hooks', () => ({
-  useExpandCollapse: () => ({ style: {}, ref: jest.fn() }),
+  useExpandCollapse: (isExpanded: boolean) => ({
+    style: {
+      display: 'grid',
+      gridTemplateRows: isExpanded ? '1fr' : '0fr',
+      opacity: isExpanded ? 1 : 0,
+    },
+    ref: jest.fn(),
+  }),
   useLocalize: () => (key: string) => key,
 }));
 
@@ -188,7 +195,7 @@ describe('ContentParts — Echo process activity', () => {
   });
 
   it('collapses completed QwenPaw process parts before body text', () => {
-    render(
+    const { container } = render(
       <ContentParts
         {...baseProps}
         endpoint="QwenPaw"
@@ -201,10 +208,57 @@ describe('ContentParts — Echo process activity', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /思考完毕.*2 个步骤/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /推理完成.*2 个步骤/ })).toBeTruthy();
     expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
     expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
     expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
+    expect(container.querySelector('[style*="grid-template-rows: 0fr"]')).toBeNull();
+  });
+
+  it('merges consecutive Echo process blocks separated only by blank text', () => {
+    const content: TMessageContentParts[] = [
+      {
+        type: ContentTypes.TOOL_CALL,
+        [ContentTypes.TOOL_CALL]: {
+          id: 'call-1',
+          name: 'lookup_first',
+          args: '{}',
+          output: '{}',
+          progress: 1,
+        },
+        ...echoMetadata('process', 'tool_call'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TEXT,
+        text: '   ',
+        ...echoMetadata('answer'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TOOL_CALL,
+        [ContentTypes.TOOL_CALL]: {
+          id: 'call-2',
+          name: 'lookup_second',
+          args: '{}',
+          output: '{}',
+          progress: 1,
+        },
+        ...echoMetadata('process', 'tool_call'),
+      } as unknown as TMessageContentParts,
+    ];
+
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting={false}
+        isLatestMessage={false}
+        content={content}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /推理完成.*2 个步骤/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /推理完成.*1 个步骤/ })).toBeNull();
+    expect(screen.queryByTestId(`real-part-${ContentTypes.TEXT}`)).toBeNull();
   });
 
   it('keeps untagged process parts on non-Echo endpoints in the default renderer', () => {
@@ -249,11 +303,51 @@ describe('ContentParts — Echo process activity', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /前置过程.*1段已折叠/ })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /思考完毕.*2 个步骤/, hidden: true })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /调用 lookup.*完成/, hidden: true })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /过程记录.*1段已折叠/ }));
+    fireEvent.click(screen.getByRole('button', { name: /推理完成.*2 个步骤/ }));
+    expect(screen.getByRole('button', { name: /调用 lookup.*完成/ })).toBeTruthy();
     expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
     expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
     expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
+  });
+
+  it('folds all non-answer Echo parts even when process parts arrive after the answer', () => {
+    const completedEchoContent: TMessageContentParts[] = [
+      {
+        type: ContentTypes.TEXT,
+        text: 'Preparing data.',
+        ...echoMetadata('narrative'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TEXT,
+        text: 'Final answer.',
+        ...echoMetadata('answer'),
+      } as unknown as TMessageContentParts,
+      {
+        type: ContentTypes.TOOL_CALL,
+        [ContentTypes.TOOL_CALL]: {
+          id: 'call-1',
+          name: 'lookup',
+          args: '{"line":"A"}',
+          output: '{"ok":true}',
+          progress: 1,
+        },
+        ...echoMetadata('process', 'tool_call'),
+      } as unknown as TMessageContentParts,
+    ];
+
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting={false}
+        isLatestMessage={false}
+        content={completedEchoContent}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /过程记录.*2段已折叠/ }));
+    fireEvent.click(screen.getByRole('button', { name: /推理完成.*1 个步骤/ }));
+    expect(screen.getByRole('button', { name: /调用 lookup.*完成/ })).toBeTruthy();
   });
 });

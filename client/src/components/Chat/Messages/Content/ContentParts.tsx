@@ -1,6 +1,6 @@
 import { memo, useRef, useMemo, useCallback, useState } from 'react';
 import type { ReactNode } from 'react';
-import { CheckCircle2, ChevronDown } from 'lucide-react';
+import { ChevronDown } from 'lucide-react';
 import { ContentTypes } from 'librechat-data-provider';
 import type {
   TMessageContentParts,
@@ -27,7 +27,7 @@ const getToolCallId = (part: TMessageContentParts): string =>
 const isToolAnchorPart = (part: TMessageContentParts): boolean =>
   part.type === ContentTypes.TEXT && part.tool_call_ids != null;
 
-const ECHO_HISTORY_TITLE = '前置过程';
+const ECHO_HISTORY_TITLE = '过程记录';
 const ECHO_HISTORY_SUMMARY_SUFFIX = '段已折叠';
 
 const normalizeEchoIdentifier = (value?: string | null): string =>
@@ -71,6 +71,21 @@ const getToolGroupId = (parts: PartWithIndex[], fallbackScope: number): string =
   return `fallback:${fallbackScope}:${firstPart.idx}`;
 };
 
+const isEchoAnswerItem = (item: EchoRenderItem): boolean =>
+  item.type === 'part' && getEchoCoPawPhase(item.part) === 'answer';
+
+const getTextPartValue = (part: TMessageContentParts): string | null => {
+  if (part.type !== ContentTypes.TEXT) {
+    return null;
+  }
+  return typeof part.text === 'string' ? part.text : (part.text?.value ?? '');
+};
+
+const isBlankTextPart = (part: TMessageContentParts): boolean => {
+  const text = getTextPartValue(part);
+  return text != null && text.trim().length === 0;
+};
+
 type EchoRenderItem =
   | {
       type: 'process';
@@ -84,6 +99,22 @@ type EchoRenderItem =
       part: TMessageContentParts;
       idx: number;
     };
+
+function mergeAdjacentEchoProcessItems(items: EchoRenderItem[]): EchoRenderItem[] {
+  const merged: EchoRenderItem[] = [];
+
+  items.forEach((item) => {
+    const previous = merged[merged.length - 1];
+    if (item.type === 'process' && previous?.type === 'process') {
+      previous.parts = [...previous.parts, ...item.parts];
+      previous.hasFollowingContent = item.hasFollowingContent;
+      return;
+    }
+    merged.push(item);
+  });
+
+  return merged;
+}
 
 type PartWithContextProps = {
   part: TMessageContentParts;
@@ -101,38 +132,50 @@ type PartWithContextProps = {
   onToolExpand?: () => void;
 };
 
+function EchoProcessContainer({ children }: { children: ReactNode }) {
+  return (
+    <div
+      className="echo-process-message flex min-h-[20px] w-full flex-col items-start overflow-visible"
+      dir="auto"
+    >
+      {children}
+    </div>
+  );
+}
+
 function EchoHistoryCollapse({ children, itemCount }: { children: ReactNode; itemCount: number }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { style, ref } = useExpandCollapse(isExpanded);
   const handleToggle = useCallback(() => setIsExpanded((prev) => !prev), []);
 
   return (
-    <div className="mb-2 mt-1">
+    <div className="w-full">
       <button
         type="button"
-        className="flex w-full items-center gap-2 py-1 text-left text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
+        className="flex w-full items-center gap-1.5 py-0.5 text-left text-xs text-text-secondary-alt opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
         onClick={handleToggle}
         aria-expanded={isExpanded}
       >
-        <CheckCircle2 className="size-4 shrink-0 text-text-secondary" aria-hidden="true" />
-        <span className="shrink-0 text-sm font-medium">{ECHO_HISTORY_TITLE}</span>
-        <span className="min-w-0 flex-1 truncate text-sm font-normal text-text-secondary">
+        <span className="shrink-0 font-normal">{ECHO_HISTORY_TITLE}</span>
+        <span className="min-w-0 flex-1 truncate font-normal text-text-secondary-alt">
           {itemCount}
           {ECHO_HISTORY_SUMMARY_SUFFIX}
         </span>
         <ChevronDown
           className={cn(
-            'size-4 shrink-0 transition-transform duration-200 ease-out',
+            'size-3.5 shrink-0 transition-transform duration-200 ease-out',
             isExpanded && 'rotate-180',
           )}
           aria-hidden="true"
         />
       </button>
-      <div style={style} aria-hidden={!isExpanded}>
-        <div className="overflow-hidden" ref={ref}>
-          {children}
+      {isExpanded && (
+        <div style={style} aria-hidden={false}>
+          <div className="mt-1 overflow-hidden border-t border-border-light pt-1" ref={ref}>
+            {children}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -445,6 +488,9 @@ const ContentParts = memo(function ContentParts({
         processParts.push({ part, idx });
         return;
       }
+      if (isBlankTextPart(part)) {
+        return;
+      }
 
       flushProcessParts(true);
       items.push({ type: 'part', key: `echo-part-${idx}`, part, idx });
@@ -466,28 +512,26 @@ const ContentParts = memo(function ContentParts({
   const echoLastVisiblePartIdx =
     echoVisiblePartIndexes[echoVisiblePartIndexes.length - 1] ?? lastContentIdx;
 
-  const finalAnswerRenderIndex = useMemo(() => {
-    if (effectiveIsSubmitting) {
-      return -1;
-    }
-    return echoRenderItems.findIndex(
-      (item) => item.type === 'part' && getEchoCoPawPhase(item.part) === 'answer',
-    );
-  }, [echoRenderItems, effectiveIsSubmitting]);
-  const shouldCollapseEchoHistory = finalAnswerRenderIndex > 0;
-  const echoHistoryItems = shouldCollapseEchoHistory
-    ? echoRenderItems.slice(0, finalAnswerRenderIndex)
+  const hasEchoAnswer = useMemo(
+    () => !effectiveIsSubmitting && echoRenderItems.some(isEchoAnswerItem),
+    [echoRenderItems, effectiveIsSubmitting],
+  );
+  const echoHistoryItems = hasEchoAnswer
+    ? mergeAdjacentEchoProcessItems(echoRenderItems.filter((item) => !isEchoAnswerItem(item)))
     : [];
-  const echoMainItems = shouldCollapseEchoHistory
-    ? echoRenderItems.slice(finalAnswerRenderIndex)
-    : echoRenderItems;
+  const echoMainItems = hasEchoAnswer
+    ? echoRenderItems.filter(isEchoAnswerItem)
+    : mergeAdjacentEchoProcessItems(echoRenderItems);
+  const shouldCollapseEchoHistory = echoHistoryItems.length > 0;
 
   const renderEchoItem = useCallback(
     (item: EchoRenderItem) => {
       if (item.type === 'process') {
         const isActiveProcess = !item.hasFollowingContent && effectiveIsSubmitting;
         return (
-          <EchoThoughtBlock key={item.key} parts={item.parts} isSubmitting={isActiveProcess} />
+          <EchoProcessContainer key={item.key}>
+            <EchoThoughtBlock parts={item.parts} isSubmitting={isActiveProcess} />
+          </EchoProcessContainer>
         );
       }
 
@@ -553,9 +597,11 @@ const ContentParts = memo(function ContentParts({
           </Container>
         )}
         {shouldCollapseEchoHistory && (
-          <EchoHistoryCollapse itemCount={echoHistoryItems.length}>
-            {echoHistoryItems.map(renderEchoItem)}
-          </EchoHistoryCollapse>
+          <EchoProcessContainer>
+            <EchoHistoryCollapse itemCount={echoHistoryItems.length}>
+              {echoHistoryItems.map(renderEchoItem)}
+            </EchoHistoryCollapse>
+          </EchoProcessContainer>
         )}
         {echoMainItems.map(renderEchoItem)}
       </SearchContext.Provider>
