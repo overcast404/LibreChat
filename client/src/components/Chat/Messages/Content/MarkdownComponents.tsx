@@ -3,6 +3,7 @@ import { useRecoilValue } from 'recoil';
 import { useToastContext } from '@librechat/client';
 import { PermissionTypes, Permissions, apiBaseUrl } from 'librechat-data-provider';
 import Mermaid, { MermaidErrorBoundary } from '~/components/Messages/Content/Mermaid';
+import ECharts from '~/components/Messages/Content/ECharts';
 import CodeBlock from '~/components/Messages/Content/CodeBlock';
 import useHasAccess from '~/hooks/Roles/useHasAccess';
 import { useFileDownload } from '~/data-provider';
@@ -39,10 +40,11 @@ export const code: React.ElementType = memo(function MarkdownCode({
   const lang = match && match[1];
   const isMath = lang === 'math';
   const isMermaid = lang === 'mermaid';
+  const isECharts = lang === 'echart' || lang === 'echarts';
   const isSingleLine = isSingleLineCode(children);
 
   const { getNextIndex, resetCounter } = useCodeBlockContext();
-  const blockIndex = useRef(getNextIndex(isMath || isMermaid || isSingleLine)).current;
+  const blockIndex = useRef(getNextIndex(isMath || isMermaid || isECharts || isSingleLine)).current;
 
   useEffect(() => {
     resetCounter();
@@ -50,6 +52,9 @@ export const code: React.ElementType = memo(function MarkdownCode({
 
   if (isMath) {
     return <>{children}</>;
+  } else if (isECharts) {
+    const content = typeof children === 'string' ? children : String(children);
+    return <ECharts code={content} />;
   } else if (isMermaid) {
     const content = typeof children === 'string' ? children : String(children);
     return (
@@ -85,6 +90,9 @@ export const codeNoExecution: React.ElementType = memo(function MarkdownCodeNoEx
 
   if (lang === 'math') {
     return children;
+  } else if (lang === 'echart' || lang === 'echarts') {
+    const content = typeof children === 'string' ? children : String(children);
+    return <ECharts code={content} />;
   } else if (lang === 'mermaid') {
     const content = typeof children === 'string' ? children : String(children);
     return <Mermaid>{content}</Mermaid>;

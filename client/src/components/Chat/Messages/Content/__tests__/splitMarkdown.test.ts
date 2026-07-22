@@ -86,6 +86,12 @@ describe('splitMarkdownIntoBlocks', () => {
       );
     });
 
+    it('does NOT count echart or echarts fences', () => {
+      const option = '{"series":[{"type":"pie","data":[1]}]}';
+      expect(splitMarkdownIntoBlocks(`\`\`\`echart\n${option}\n\`\`\``)[0].codeBlockCount).toBe(0);
+      expect(splitMarkdownIntoBlocks(`\`\`\`echarts\n${option}\n\`\`\``)[0].codeBlockCount).toBe(0);
+    });
+
     it('does NOT count hyphenated math/mermaid languages (renderer normalizes them)', () => {
       expect(
         splitMarkdownIntoBlocks('```mermaid-js\ngraph TD; A-->B;\n```')[0].codeBlockCount,

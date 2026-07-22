@@ -19,6 +19,11 @@ jest.mock('~/components/Messages/Content/CodeBlock', () => ({
   ),
 }));
 
+jest.mock('~/components/Messages/Content/ECharts', () => ({
+  __esModule: true,
+  default: ({ code }: { code: string }) => <div data-testid="echarts">{code}</div>,
+}));
+
 /** The previous whole-message renderer: a single ReactMarkdown under one set of providers. */
 const OldMarkdown = ({ content }: { content: string }) => (
   <ArtifactProvider>
@@ -96,6 +101,10 @@ const MIXED = [
   '',
   '```mermaid',
   'graph TD; A-->B;',
+  '```',
+  '',
+  '```echart',
+  '{"series":[{"type":"pie","data":[{"value":1}]}]}',
   '```',
   '',
   '```ts',
@@ -218,6 +227,7 @@ describe('MarkdownBlocks rendering smoke', () => {
       </RecoilRoot>,
     );
     expect(screen.getAllByTestId('cb')).toHaveLength(4);
+    expect(screen.getByTestId('echarts')).toHaveTextContent('"type":"pie"');
   });
 });
 
