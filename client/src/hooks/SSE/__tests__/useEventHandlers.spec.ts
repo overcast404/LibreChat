@@ -1,11 +1,63 @@
-import { Constants } from 'librechat-data-provider';
+import { Constants, ContentTypes } from 'librechat-data-provider';
 import type { EventSubmission, TMessage } from 'librechat-data-provider';
 import {
   buildCreatedInitialResponse,
+  createErrorMessage,
   getExistingConversationAbortMessages,
   isInitialNewConversationSubmission,
   mergeRegenerateFinalMessages,
 } from '~/hooks/SSE/useEventHandlers';
+
+describe('createErrorMessage', () => {
+  it('keeps streamed content and appends the terminal error', () => {
+    const userMessage = {
+      messageId: 'user-1',
+      conversationId: 'conversation-1',
+      isCreatedByUser: true,
+      text: 'Hello',
+      sender: 'User',
+    } as TMessage;
+    const partialResponse = {
+      messageId: 'assistant-1',
+      parentMessageId: userMessage.messageId,
+      conversationId: 'conversation-1',
+      isCreatedByUser: false,
+      text: '',
+      sender: 'Assistant',
+      content: [{ type: ContentTypes.TEXT, text: 'Already streamed' }],
+    } as TMessage;
+    const submission = {
+      messages: [],
+      userMessage,
+      initialResponse: {
+        ...partialResponse,
+        content: [],
+      },
+    } as unknown as EventSubmission;
+
+    const result = createErrorMessage({
+      errorMetadata: {
+        ...partialResponse,
+        text: 'Model timed out after 60s',
+        error: true,
+      },
+      getMessages: () => [userMessage, partialResponse],
+      submission,
+    });
+
+    expect(result).toMatchObject({
+      messageId: partialResponse.messageId,
+      parentMessageId: userMessage.messageId,
+      conversationId: 'conversation-1',
+      text: '',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.content).toEqual([
+      { type: ContentTypes.TEXT, text: 'Already streamed' },
+      { type: ContentTypes.ERROR, error: 'Model timed out after 60s' },
+    ]);
+  });
+});
 
 describe('buildCreatedInitialResponse', () => {
   const userMessage = {

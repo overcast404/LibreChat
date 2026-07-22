@@ -151,11 +151,22 @@ function getEchoContentPhase(part) {
 }
 
 function getEchoAnswerContent(contentParts) {
-  const hasEchoAnswer = contentParts.some((part) => getEchoContentPhase(part) === 'answer');
+  const nonErrorParts = contentParts.filter((part) => part?.type !== ContentTypes.ERROR);
+  const hasEchoAnswer = nonErrorParts.some((part) => getEchoContentPhase(part) === 'answer');
   if (!hasEchoAnswer) {
-    return contentParts;
+    return nonErrorParts;
   }
-  return contentParts.filter((part) => getEchoContentPhase(part) === 'answer');
+  return nonErrorParts.filter((part) => getEchoContentPhase(part) === 'answer');
+}
+
+function getGenerationErrorMessage(error) {
+  if (typeof error?.message === 'string' && error.message) {
+    return error.message;
+  }
+  if (typeof error === 'string' && error) {
+    return error;
+  }
+  return 'Echo CoPaw request failed';
 }
 
 async function emitContentSnapshot({
@@ -249,27 +260,50 @@ async function runEchoCoPawGeneration({
     userId: req.user?.email || userId,
   });
 
-  for await (const event of iterEchoCoPawEvents({
-    baseUrl,
-    payload,
-    signal: job.abortController.signal,
-  })) {
-    const eventError = getEchoEventError(event);
-    if (eventError) {
-      throw new Error(eventError);
+  let generationError = null;
+  try {
+    for await (const event of iterEchoCoPawEvents({
+      baseUrl,
+      payload,
+      signal: job.abortController.signal,
+    })) {
+      const eventError = getEchoEventError(event);
+      if (eventError) {
+        throw new Error(eventError);
+      }
+
+      const snapshot = accumulator.appendEvent(event);
+      if (!snapshot) {
+        continue;
+      }
+
+      contentParts.splice(0, contentParts.length, ...snapshot.content);
+      await emitContentSnapshot({
+        streamId,
+        conversationId,
+        messageId: responseMessageId,
+        contentParts: snapshot.liveContent ?? snapshot.content,
+        emittedParts,
+      });
+    }
+  } catch (error) {
+    if (job.abortController.signal.aborted) {
+      throw error;
     }
 
-    const snapshot = accumulator.appendEvent(event);
-    if (!snapshot) {
-      continue;
-    }
-
-    contentParts.splice(0, contentParts.length, ...snapshot.content);
+    generationError = getGenerationErrorMessage(error);
+    logger.warn(
+      `[EchoCoPawController] Generation ended after partial output for ${streamId}: ${generationError}`,
+    );
+    contentParts.push({
+      type: ContentTypes.ERROR,
+      [ContentTypes.ERROR]: generationError,
+    });
     await emitContentSnapshot({
       streamId,
       conversationId,
       messageId: responseMessageId,
-      contentParts: snapshot.liveContent ?? snapshot.content,
+      contentParts,
       emittedParts,
     });
   }
@@ -286,7 +320,7 @@ async function runEchoCoPawGeneration({
     iconURL: endpointOption.iconURL,
     text: parseTextParts(answerContent, true),
     content: finalContent,
-    unfinished: false,
+    unfinished: generationError != null,
     error: false,
     isCreatedByUser: false,
     user: userId,

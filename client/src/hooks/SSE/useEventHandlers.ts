@@ -165,7 +165,7 @@ export type EventHandlerParams = {
   setShowStopButton: SetterOrUpdater<boolean>;
 };
 
-const createErrorMessage = ({
+export const createErrorMessage = ({
   errorMetadata,
   getMessages,
   submission,
@@ -939,8 +939,13 @@ export default function useEventHandlers({
 
       const receivedConvoId = data.conversationId ?? '';
       if (!conversationId && !receivedConvoId) {
-        const convoId = `_${v4()}`;
-        const errorResponse = parseErrorResponse(data);
+        const preservedErrorResponse = createErrorMessage({
+          errorMetadata: parseErrorResponse(data),
+          getMessages,
+          submission,
+        });
+        const convoId = preservedErrorResponse.conversationId || `_${v4()}`;
+        const errorResponse = { ...preservedErrorResponse, conversationId: convoId };
         setErrorMessages(convoId, errorResponse);
         if (newConversation) {
           newConversation({
@@ -951,17 +956,25 @@ export default function useEventHandlers({
         setIsSubmitting(false);
         return;
       } else if (!receivedConvoId) {
-        const errorResponse = parseErrorResponse(data);
+        const errorResponse = createErrorMessage({
+          errorMetadata: parseErrorResponse(data),
+          getMessages,
+          submission,
+        });
         setErrorMessages(conversationId, errorResponse);
         setIsSubmitting(false);
         return;
       }
 
-      const errorResponse = tMessageSchema.parse({
-        ...data,
-        error: true,
-        parentMessageId: userMessage.messageId,
-      }) as TMessage;
+      const errorResponse = createErrorMessage({
+        errorMetadata: tMessageSchema.parse({
+          ...data,
+          error: true,
+          parentMessageId: userMessage.messageId,
+        }) as TMessage,
+        getMessages,
+        submission,
+      });
 
       setErrorMessages(receivedConvoId, errorResponse);
       if (receivedConvoId && paramId === Constants.NEW_CONVO && newConversation) {
