@@ -2552,9 +2552,11 @@ html {
   animation: moveUp 4s ease-in-out infinite;
 }
 
-.message-content {
+.markdown.message-content {
+  --markdown-block-gap: 0.75rem;
+  --markdown-section-gap: 1.5rem;
   font-size: var(--markdown-font-size, var(--font-size-base));
-  line-height: 1.55;
+  line-height: 1.65;
 }
 
 .text-message + .echo-process-message,
@@ -2566,96 +2568,131 @@ html {
   margin-top: 0.625rem;
 }
 
-.message-content > :first-child {
+.markdown.message-content > :first-child {
   margin-top: 0;
 }
 
-.message-content > :last-child {
+.markdown.message-content > :last-child {
   margin-bottom: 0;
 }
 
-.message-content :where(p) {
-  margin-bottom: 0.45rem;
+.markdown.message-content :where(p) {
+  margin: 0 0 var(--markdown-block-gap);
+}
+
+.markdown.message-content :where(h1, h2, h3, h4, h5) {
+  color: var(--tw-prose-headings);
+  line-height: 1.35;
+}
+
+.markdown.message-content :where(h1) {
+  margin: 2rem 0 0.75rem;
+  font-size: calc(var(--markdown-font-size, var(--font-size-base)) * 1.5);
+  font-weight: 700;
+}
+
+.markdown.message-content :where(h2) {
+  margin: 1.75rem 0 0.625rem;
+  font-size: calc(var(--markdown-font-size, var(--font-size-base)) * 1.375);
+  font-weight: 700;
+}
+
+.markdown.message-content :where(h3) {
+  margin: var(--markdown-section-gap) 0 0.5rem;
+  font-size: calc(var(--markdown-font-size, var(--font-size-base)) * 1.1875);
+  font-weight: 600;
+}
+
+.markdown.message-content :where(h4) {
+  margin: 1.125rem 0 0.375rem;
+  font-size: calc(var(--markdown-font-size, var(--font-size-base)) * 1.0625);
+  font-weight: 600;
+}
+
+.markdown.message-content :where(h5) {
+  margin: 1rem 0 0.375rem;
+  font-size: var(--markdown-font-size, var(--font-size-base));
+  font-weight: 600;
+}
+
+.markdown.message-content > :where(h1, h2, h3, h4, h5):first-child,
+.markdown.message-content :where(hr + h1, hr + h2, hr + h3, hr + h4, hr + h5) {
   margin-top: 0;
 }
 
-.message-content
-  > :where(p, ul, ol, blockquote, pre, .markdown-table-wrapper)
-  + :where(p, ul, ol, blockquote, pre, .markdown-table-wrapper) {
-  margin-top: 0.65rem;
-}
-
-.message-content :where(h1, h2, h3, h4, h5) {
-  line-height: 1.25;
-  margin-bottom: 0.35rem;
-}
-
-.message-content :where(h1, h2) {
-  margin-top: 0.9rem;
-}
-
-.message-content :where(h3, h4, h5) {
+.markdown.message-content :where(h1, h2, h3, h4, h5) + :where(h1, h2, h3, h4, h5) {
   margin-top: 0.75rem;
 }
 
-.message-content > :where(h1, h2, h3, h4, h5):first-child {
-  margin-top: 0;
-}
-
-.message-content :where(ul, ol) {
-  margin-bottom: 0.6rem;
-  margin-top: 0.6rem;
+.markdown.message-content :where(ul, ol) {
+  margin: 0.5rem 0 0.875rem;
   overflow: visible;
-  padding-left: 1.65rem;
+  padding-left: 1.5rem;
 }
 
-.message-content :where(li) {
-  margin-bottom: 0.25rem;
-  margin-top: 0.25rem;
+.markdown.message-content :where(li) {
+  margin: 0.25rem 0;
   overflow: visible;
+  padding-left: 0.25rem;
 }
 
-.message-content :where(li > p) {
-  margin-bottom: 0.25rem;
-}
-
-.message-content :where(blockquote) {
-  margin-bottom: 0.65rem;
-  margin-top: 0.65rem;
-  padding-left: 0.85rem;
-}
-
-.message-content .markdown-table-wrapper {
-  margin-bottom: 0.75rem;
-  margin-top: 0.75rem;
-  padding-bottom: 0.15rem;
-}
-
-.message-content .markdown-table-wrapper table {
-  font-size: calc(0.92 * var(--markdown-font-size, var(--font-size-base)));
-  line-height: 1.45;
+.markdown.message-content :where(li > p) {
   margin: 0;
 }
 
-.message-content .markdown-table-wrapper th,
-.message-content .markdown-table-wrapper td {
-  padding: 0.4rem 0.625rem;
+.markdown.message-content :where(ul ul, ul ol, ol ul, ol ol) {
+  margin: 0.375rem 0 0.125rem;
+}
+
+.markdown.message-content :where(blockquote) {
+  margin: 1rem 0;
+  padding: 0.125rem 0 0.125rem 0.875rem;
+  line-height: inherit;
+}
+
+.markdown.message-content :where(blockquote p) {
+  margin: 0;
+}
+
+.markdown.message-content :where(blockquote p:first-of-type)::before,
+.markdown.message-content :where(blockquote p:last-of-type)::after {
+  content: none;
+}
+
+.markdown.message-content :where(hr) {
+  margin: 1.25rem 0;
+}
+
+.markdown.message-content .markdown-table-wrapper {
+  margin: 1rem 0;
+  padding-bottom: 0.15rem;
+}
+
+.markdown.message-content .markdown-table-wrapper table {
+  font-size: calc(0.9375 * var(--markdown-font-size, var(--font-size-base)));
+  line-height: 1.5;
+  margin: 0;
+}
+
+.markdown.message-content .markdown-table-wrapper th,
+.markdown.message-content .markdown-table-wrapper td {
+  padding: 0.5rem 0.75rem;
   vertical-align: top;
 }
 
-.message-content .markdown-table-wrapper th:first-child {
+.markdown.message-content .markdown-table-wrapper th:first-child {
   border-top-left-radius: 0.5rem;
 }
 
-.message-content .markdown-table-wrapper th:last-child {
+.markdown.message-content .markdown-table-wrapper th:last-child {
   border-top-right-radius: 0.5rem;
 }
 
-.message-content .markdown-table-wrapper tbody tr:last-child td:first-child {
+.markdown.message-content .markdown-table-wrapper tbody tr:last-child td:first-child {
   border-bottom-left-radius: 0.5rem;
 }
 
-.message-content .markdown-table-wrapper tbody tr:last-child td:last-child {
+.markdown.message-content .markdown-table-wrapper tbody tr:last-child td:last-child {
   border-bottom-right-radius: 0.5rem;
 }
 
