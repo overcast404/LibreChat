@@ -212,7 +212,9 @@ describe('ContentParts — Echo process activity', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /推理完成.*2 个步骤/ })).toBeTruthy();
+    const summaryButton = screen.getByRole('button', { name: /2 个步骤/ });
+    expect(summaryButton.querySelector('span')).toHaveClass('flex-1');
+    expect(screen.queryByText('推理完成')).toBeNull();
     expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
     expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
     expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
@@ -260,8 +262,9 @@ describe('ContentParts — Echo process activity', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: /推理完成.*2 个步骤/ })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /推理完成.*1 个步骤/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /2 个步骤/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /1 个步骤/ })).toBeNull();
+    expect(screen.queryByText('推理完成')).toBeNull();
     expect(screen.queryByTestId(`real-part-${ContentTypes.TEXT}`)).toBeNull();
   });
 
@@ -307,8 +310,15 @@ describe('ContentParts — Echo process activity', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /过程记录.*1段已折叠/ }));
-    fireEvent.click(screen.getByRole('button', { name: /推理完成.*2 个步骤/ }));
+    const historyButton = screen.getByRole('button', { name: /过程记录.*1段已折叠/ });
+    fireEvent.click(historyButton);
+    expect(historyButton.nextElementSibling?.firstElementChild).toHaveClass(
+      'echo-history-content',
+      'mt-2',
+      'space-y-4',
+      'pt-2',
+    );
+    fireEvent.click(screen.getByRole('button', { name: /2 个步骤/ }));
     expect(screen.getByRole('button', { name: /调用 lookup.*完成/ })).toBeTruthy();
     expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
     expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
@@ -398,7 +408,8 @@ describe('ContentParts — Echo process activity', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /过程记录.*2段已折叠/ }));
-    fireEvent.click(screen.getByRole('button', { name: /推理完成.*1 个步骤/ }));
     expect(screen.getByRole('button', { name: /调用 lookup.*完成/ })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /1 个步骤/ })).toBeNull();
+    expect(screen.queryByText('推理完成')).toBeNull();
   });
 });

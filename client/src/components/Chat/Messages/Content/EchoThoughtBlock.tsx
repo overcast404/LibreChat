@@ -250,8 +250,7 @@ const EchoThoughtBlock = memo(function EchoThoughtBlock({
     [parts, localize, isSubmitting],
   );
   const currentStep = steps[steps.length - 1];
-  const label = isSubmitting ? (currentStep?.title ?? '思考中...') : '推理完成';
-  const summary = isSubmitting ? undefined : `${steps.length} 个步骤`;
+  const label = isSubmitting ? (currentStep?.title ?? '思考中...') : `${steps.length} 个步骤`;
 
   const handleToggle = useCallback(() => setIsExpanded((prev) => !prev), []);
 
@@ -259,28 +258,27 @@ const EchoThoughtBlock = memo(function EchoThoughtBlock({
     return null;
   }
 
+  if (!isSubmitting && steps.length === 1) {
+    return (
+      <div className="w-full">
+        <ol className="py-0.5">
+          <EchoProcessStepRow step={steps[0]} />
+        </ol>
+      </div>
+    );
+  }
+
   return (
     <div className="w-full">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 py-0.5 text-left text-xs text-text-secondary-alt opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
+        className="flex w-full items-center gap-2 py-1 text-left text-xs text-text-secondary-alt opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
         onClick={handleToggle}
         aria-expanded={isExpanded}
       >
-        <span
-          className={cn(
-            'min-w-0 truncate font-normal',
-            !isSubmitting && 'shrink-0',
-            isSubmitting && 'shimmer',
-          )}
-        >
+        <span className={cn('min-w-0 flex-1 truncate font-normal', isSubmitting && 'shimmer')}>
           {label}
         </span>
-        {summary && (
-          <span className="min-w-0 flex-1 truncate font-normal text-text-secondary-alt">
-            {summary}
-          </span>
-        )}
         <ChevronDown
           className={cn(
             'size-3.5 shrink-0 transition-transform duration-200 ease-out',

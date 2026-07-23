@@ -202,7 +202,7 @@ function EchoHistoryCollapse({ children, itemCount }: { children: ReactNode; ite
     <div className="w-full">
       <button
         type="button"
-        className="flex w-full items-center gap-1.5 py-0.5 text-left text-xs text-text-secondary-alt opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
+        className="flex w-full items-center gap-2 py-1 text-left text-xs text-text-secondary-alt opacity-80 transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-heavy"
         onClick={handleToggle}
         aria-expanded={isExpanded}
       >
@@ -221,7 +221,10 @@ function EchoHistoryCollapse({ children, itemCount }: { children: ReactNode; ite
       </button>
       {isExpanded && (
         <div style={style} aria-hidden={false}>
-          <div className="mt-1 overflow-hidden border-t border-border-light pt-1" ref={ref}>
+          <div
+            className="echo-history-content mt-2 space-y-4 overflow-hidden border-t border-border-light pt-2"
+            ref={ref}
+          >
             {children}
           </div>
         </div>
