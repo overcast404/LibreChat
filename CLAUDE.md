@@ -1,8 +1,10 @@
-# LibreChat
+# Echo UI (LibreChat Fork)
 
 ## Project Overview
 
-LibreChat is a monorepo with the following key workspaces:
+Echo UI is an Echo CoPaw–integrated fork of LibreChat. It adds a custom **Echo CoPaw** agent that renders structured process records (reasoning → tool calls → narrative → answer) within chat messages.
+
+The monorepo has the following key workspaces:
 
 | Workspace | Language | Side | Dependency | Purpose |
 |---|---|---|---|---|
@@ -13,7 +15,23 @@ LibreChat is a monorepo with the following key workspaces:
 | `/client` | TypeScript/React | Frontend | `packages/data-provider`, `packages/client` | Frontend SPA |
 | `/packages/client` | TypeScript | Frontend | `packages/data-provider` | Shared frontend utilities |
 
-The source code for `@librechat/agents` (major backend dependency, same team) is at `/home/danny/agentus`.
+### Echo CoPaw Architecture
+
+Echo CoPaw communicates with an adapter at `192.168.31.49:39088` (configured as the `QwenPaw` custom endpoint in `librechat.yaml`).
+
+| Layer | Path | Purpose |
+|---|---|---|
+| Controller | `api/server/controllers/agents/echoCoPaw.js` | HTTP route handler for Echo CoPaw requests |
+| Service | `api/server/services/EchoCoPaw/` | Business logic: streaming, files, content parts |
+| Frontend | `client/src/components/Chat/Messages/Content/EchoThoughtBlock.tsx` | Structured process-record rendering |
+| Frontend | `client/src/hooks/SSE/useStepHandler.ts` | SSE delta merging with Echo metadata preservation |
+
+#### Echo CoPaw Frontend Details
+
+- **Content phases**: Echo CoPaw messages carry `echo_copaw` metadata with phases `process`, `narrative`, `answer`. Each content part is annotated with `kind` (`message`, `reasoning`, `tool_call`) and `sourceId`.
+- **EchoThoughtBlock**: Renders process-phase parts as an expandable step list. Tool calls show input/output when expanded; reasoning/message parts show their text content. A shimmer effect indicates the currently running step during submission.
+- **Metadata preservation**: `useStepHandler.ts` uses `preserveEchoCoPawMetadata()` to ensure `echo_copaw` metadata survives SSE delta merges (text streaming, tool call updates). The metadata is propagated across `TEXT`, `THINK`, and `TOOL_CALL` content types.
+- **File upload**: Echo CoPaw–specific file logic lives in `api/server/services/EchoCoPaw/files.js`, wired through custom routes in `api/server/routes/files/files.js`. File schema additions are in `packages/data-schemas/src/schema/file.ts` and `packages/data-schemas/src/types/file.ts`.
 
 ---
 
@@ -130,6 +148,15 @@ Multi-line imports count total character length across all lines. Consolidate va
 
 ---
 
+## Development Environment
+
+本地启动时需要确保 `.env` 中配置了以下变量（如未配置，Echo CoPaw 会 fallback 到 `127.0.0.1:39088` 而无法连接 adapter）：
+
+```
+ECHO_COPAW_BASE_URL=http://192.168.31.49:39088
+ECHO_COPAW_ENDPOINTS=QwenPaw
+```
+
 ## Development Commands
 
 | Command | Purpose |
@@ -142,10 +169,27 @@ Multi-line imports count total character length across all lines. Consolidate va
 | `npm run frontend` | Build all compiled code sequentially (legacy fallback) |
 | `npm run frontend:dev` | Start frontend dev server with HMR (port 3090, requires backend running) |
 | `npm run build:data-provider` | Rebuild `packages/data-provider` after changes |
+| `npm run build:data-schemas` | Rebuild `packages/data-schemas` after changes |
+| `npm run build:api` | Rebuild `packages/api` after changes |
+| `npm run build:client-package` | Rebuild `packages/client` after changes |
+| `npm run build:packages` | Build all packages (data-provider → data-schemas → api → client-package) |
 
 - Node.js: v24.16.0
 - Database: MongoDB
 - Backend runs on `http://localhost:3080/`; frontend dev server on `http://localhost:3090/`
+- Echo CoPaw adapter: `http://192.168.31.49:39088`
+
+---
+
+## Test Credentials
+
+本地测试账号，地址: `http://localhost:3090/login`
+
+| 字段 | 值 |
+|---|---|
+| 邮箱 | `test@echo.local` |
+| 密码 | `test123456` |
+| 姓名 | 测试用户 |
 
 ---
 
