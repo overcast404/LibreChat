@@ -211,6 +211,152 @@ describe('EchoCoPaw content part adapter', () => {
     expect(replaced.content[0].text).toBe('hello');
   });
 
+  it('replaces completed content snapshots instead of appending them', () => {
+    const acc = new EchoCoPawContentAccumulator();
+    acc.appendEvent({ object: 'content', type: 'text', msg_id: 'm1', text: 'draft' });
+
+    const snapshot = acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      msg_id: 'm1',
+      delta: false,
+      text: 'final',
+    });
+
+    expect(snapshot.content[0].text).toBe('final');
+  });
+
+  it('normalizes the repeated cumulative snapshots emitted by Echo', () => {
+    const answer = '嗨！我是齐小光😊，产线运营专家，专精生产时序数据解读。有什么可以帮你的吗？';
+    const completedMessage = {
+      id: 'm1',
+      object: 'message',
+      role: 'assistant',
+      type: 'message',
+      status: 'completed',
+      content: [
+        { type: 'text', text: answer + answer },
+        { type: 'text', text: answer },
+      ],
+    };
+    const acc = new EchoCoPawContentAccumulator();
+
+    acc.appendEvent({
+      object: 'message',
+      id: 'm1',
+      role: 'assistant',
+      type: 'message',
+      content: [],
+    });
+    acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      msg_id: 'm1',
+      delta: true,
+      text: answer + answer,
+    });
+    acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      msg_id: 'm1',
+      delta: false,
+      text: answer + answer,
+    });
+    acc.appendEvent(completedMessage);
+    const snapshot = acc.appendEvent({
+      object: 'response',
+      status: 'completed',
+      output: [completedMessage],
+    });
+
+    expect(snapshot.content).toMatchObject([{ type: ContentTypes.TEXT, text: answer }]);
+    expect(acc.getMessages()[0].content).toEqual([{ type: 'text', text: answer }]);
+  });
+
+  it('normalizes repeated Echo answers separated by a hidden summary comment', () => {
+    const answer =
+      '太好了！现在数据全部齐了！这是完整的产线节拍分析报告，包含白班、夜班和最终达标结论。';
+    const repeatedAnswer = `${answer}\n\n<!-- ⟦ 节拍分析摘要 ⟧ -->${answer}${answer}`;
+    const content = buildContentPartsFromEchoMessages([
+      {
+        id: 'answer-1',
+        role: 'assistant',
+        type: 'message',
+        content: [{ type: 'text', text: repeatedAnswer }],
+      },
+    ]);
+
+    expect(content).toMatchObject([{ type: ContentTypes.TEXT, text: answer }]);
+  });
+
+  it('normalizes repeated Echo tool arguments', () => {
+    const args = '{"skill":"production-line-data-analysis-base-ontology"}';
+    const content = buildContentPartsFromEchoMessages([
+      {
+        id: 'tool-1',
+        role: 'assistant',
+        type: 'tool_use',
+        content: [
+          {
+            type: 'text',
+            data: { name: 'Skill', call_id: 'call-1', arguments: args + args },
+          },
+        ],
+      },
+    ]);
+
+    expect(toolCallPart(visibleParts(content)[0]).args).toBe(args);
+  });
+
+  it('keeps canonical streamed content when completed snapshots repeat or diverge', () => {
+    const canonical = '正确的单份最终回答。';
+    const completedMessage = {
+      id: 'answer-1',
+      object: 'message',
+      role: 'assistant',
+      type: 'message',
+      status: 'completed',
+      content: [{ type: 'text', text: '应被丢弃的完成快照。' }],
+    };
+    const acc = new EchoCoPawContentAccumulator();
+
+    acc.appendEvent({
+      id: 'answer-1',
+      object: 'message',
+      role: 'assistant',
+      type: 'message',
+      status: 'in_progress',
+      content: [],
+    });
+    acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      msg_id: 'answer-1',
+      delta: true,
+      text: '草稿',
+    });
+    acc.appendEvent({
+      object: 'content',
+      type: 'text',
+      msg_id: 'answer-1',
+      delta: false,
+      text: canonical,
+    });
+    acc.appendEvent(completedMessage);
+    const snapshot = acc.appendEvent({
+      object: 'response',
+      status: 'completed',
+      output: [completedMessage],
+    });
+
+    expect(snapshot.content).toMatchObject([{ type: ContentTypes.TEXT, text: canonical }]);
+    expect(acc.getMessages()[0]).toMatchObject({
+      id: 'answer-1',
+      status: 'completed',
+      content: [{ type: 'text', text: canonical }],
+    });
+  });
+
   it('accumulates AgentScope msg_id text deltas around tools', () => {
     const acc = new EchoCoPawContentAccumulator();
 

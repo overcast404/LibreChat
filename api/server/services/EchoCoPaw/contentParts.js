@@ -32,6 +32,8 @@ const DEFAULT_TOOL_NAME = 'Tool';
 const LEGACY_TEXT_MESSAGE_ID = '__echo_copaw_text_delta__';
 const ECHO_COPAW_METADATA_KEY = 'echo_copaw';
 const ECHO_COPAW_SOURCE = 'echo-copaw';
+const MIN_EXACT_REPEAT_LENGTH = 16;
+const ECHO_HIDDEN_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
 function lower(value) {
   return typeof value === 'string' ? value.toLowerCase() : '';
@@ -60,12 +62,51 @@ function parseJsonObject(value) {
   }
 }
 
+function collapseExactTextRepeats(value) {
+  if (typeof value !== 'string' || value.length < MIN_EXACT_REPEAT_LENGTH * 2) {
+    return value;
+  }
+
+  const comparable = value.replace(ECHO_HIDDEN_COMMENT_PATTERN, '').trim();
+  if (comparable.length < MIN_EXACT_REPEAT_LENGTH * 2) {
+    return value;
+  }
+
+  const anchor = comparable.slice(0, MIN_EXACT_REPEAT_LENGTH);
+  let repeatStart = comparable.indexOf(anchor, MIN_EXACT_REPEAT_LENGTH);
+
+  while (repeatStart >= MIN_EXACT_REPEAT_LENGTH) {
+    const firstCopy = comparable.slice(0, repeatStart).trimEnd();
+    let cursor = repeatStart;
+    let repeatCount = 1;
+
+    while (cursor < comparable.length) {
+      while (/\s/.test(comparable[cursor] ?? '')) {
+        cursor += 1;
+      }
+      if (!comparable.startsWith(firstCopy, cursor)) {
+        break;
+      }
+      repeatCount += 1;
+      cursor += firstCopy.length;
+    }
+
+    if (repeatCount > 1 && comparable.slice(cursor).trim().length === 0) {
+      return firstCopy;
+    }
+
+    repeatStart = comparable.indexOf(anchor, repeatStart + 1);
+  }
+
+  return value;
+}
+
 function normalizeToolOutputToString(output) {
   if (output == null) {
     return '';
   }
   if (typeof output === 'string') {
-    return output;
+    return collapseExactTextRepeats(output);
   }
   try {
     return JSON.stringify(output);
@@ -79,7 +120,7 @@ function normalizeToolArgs(args) {
     return '';
   }
   if (typeof args === 'string') {
-    return args;
+    return collapseExactTextRepeats(args);
   }
   try {
     return JSON.stringify(args);
@@ -97,7 +138,7 @@ function getContentParts(raw) {
 
 function normalizeEchoContentPart(part) {
   if (typeof part === 'string') {
-    return { type: 'text', text: part };
+    return { type: 'text', text: collapseExactTextRepeats(part) };
   }
 
   const data = part?.data;
@@ -112,8 +153,9 @@ function normalizeEchoContentPart(part) {
 
   return {
     type: typeof part?.type === 'string' ? part.type : 'text',
-    text: typeof part?.text === 'string' ? part.text : undefined,
-    thinking: typeof part?.thinking === 'string' ? part.thinking : undefined,
+    text: typeof part?.text === 'string' ? collapseExactTextRepeats(part.text) : undefined,
+    thinking:
+      typeof part?.thinking === 'string' ? collapseExactTextRepeats(part.thinking) : undefined,
     data,
     url,
     image_url: imageUrl,
@@ -132,21 +174,38 @@ function normalizeEchoContentPart(part) {
   };
 }
 
+function collapseRepeatedTextContent(parts) {
+  if (!parts.length || parts.some((part) => part.text == null && part.thinking == null)) {
+    return parts;
+  }
+
+  const text = parts.map((part) => part.text ?? part.thinking ?? '').join('');
+  const collapsed = collapseExactTextRepeats(text);
+  if (collapsed === text) {
+    return parts;
+  }
+
+  const first = parts[0];
+  return [
+    first.thinking != null ? { ...first, thinking: collapsed } : { ...first, text: collapsed },
+  ];
+}
+
 function normalizeEchoContent(raw) {
   if (Array.isArray(raw?.content)) {
-    return raw.content.map(normalizeEchoContentPart);
+    return collapseRepeatedTextContent(raw.content.map(normalizeEchoContentPart));
   }
   if (typeof raw?.content === 'string') {
-    return [{ type: 'text', text: raw.content }];
+    return [{ type: 'text', text: collapseExactTextRepeats(raw.content) }];
   }
   if (asObject(raw?.content)) {
     return [{ type: 'text', data: raw.content }];
   }
   if (typeof raw?.text === 'string') {
-    return [{ type: 'text', text: raw.text }];
+    return [{ type: 'text', text: collapseExactTextRepeats(raw.text) }];
   }
   if (typeof raw?.thinking === 'string') {
-    return [{ type: 'thinking', thinking: raw.thinking }];
+    return [{ type: 'thinking', thinking: collapseExactTextRepeats(raw.thinking) }];
   }
   return [];
 }
@@ -156,6 +215,7 @@ function normalizeEchoMessage(raw) {
     ...(typeof raw?.id === 'string' ? { id: raw.id } : {}),
     role: typeof raw?.role === 'string' ? raw.role : 'assistant',
     type: typeof raw?.type === 'string' ? raw.type : '',
+    ...(typeof raw?.status === 'string' ? { status: raw.status } : {}),
     content: normalizeEchoContent(raw),
     metadata: asObject(raw?.metadata) ?? undefined,
     call_id: raw?.call_id,
@@ -220,7 +280,7 @@ function normalizeAssistantMessageOrder(messages) {
   return messages;
 }
 
-function upsertMessageById(acc, msg) {
+function upsertMessageById(acc, msg, preserveExistingContent = false) {
   const messageId = msg.id;
   if (!messageId) {
     return normalizeAssistantMessageOrder(insertAssistantMessage(acc, msg));
@@ -232,10 +292,13 @@ function upsertMessageById(acc, msg) {
   }
 
   const existing = acc[idx];
+  const existingContent = getContentParts(existing);
   const keepText = extractPlainTextFromMsg(existing);
   const incomingText = extractPlainTextFromMsg(msg);
   const next = acc.slice();
-  if (incomingText.length >= keepText.length) {
+  if (preserveExistingContent && existingContent.length > 0) {
+    next[idx] = { ...msg, content: existingContent };
+  } else if (incomingText.length >= keepText.length) {
     next[idx] = msg;
   } else {
     next[idx] = { ...msg, content: [{ type: 'text', text: keepText }] };
@@ -247,7 +310,15 @@ function mergeStreamAccumulated(acc, event) {
   if (event?.object === 'response') {
     const output = Array.isArray(event.output) ? event.output : null;
     if (output?.length) {
-      return normalizeAssistantMessageOrder(output.map(normalizeEchoMessage));
+      const existingById = new Map(acc.filter((msg) => msg.id).map((msg) => [msg.id, msg]));
+      return normalizeAssistantMessageOrder(
+        output.map((rawMessage) => {
+          const incoming = normalizeEchoMessage(rawMessage);
+          const existing = incoming.id ? existingById.get(incoming.id) : null;
+          const existingContent = getContentParts(existing);
+          return existingContent.length > 0 ? { ...incoming, content: existingContent } : incoming;
+        }),
+      );
     }
     return null;
   }
@@ -257,7 +328,7 @@ function mergeStreamAccumulated(acc, event) {
     if (!STREAM_ACCUMULATED_MESSAGE_TYPES.has(type)) {
       return null;
     }
-    return upsertMessageById(acc, normalizeEchoMessage(event));
+    return upsertMessageById(acc, normalizeEchoMessage(event), event.status === 'completed');
   }
 
   return null;
@@ -278,7 +349,7 @@ function appendTextDeltaToAcc(acc, msgId, delta) {
 
   const next = acc.slice();
   const current = next[idx];
-  const merged = extractPlainTextFromMsg(current) + delta;
+  const merged = collapseExactTextRepeats(extractPlainTextFromMsg(current) + delta);
   next[idx] = { ...current, content: [{ type: 'text', text: merged }] };
   return normalizeAssistantMessageOrder(next);
 }
@@ -313,12 +384,12 @@ function extractStreamTextChunk(event) {
       text = event.content;
     }
     const msgId = typeof event.msg_id === 'string' ? event.msg_id : undefined;
-    const mode = event.status === 'completed' && event.delta !== true ? 'replace' : 'append';
-    return text ? { text, msgId, mode } : {};
+    const mode = event.delta === false || event.status === 'completed' ? 'replace' : 'append';
+    return text ? { text: collapseExactTextRepeats(text), msgId, mode } : {};
   }
 
   if (typeof event?.text === 'string' && event.text.length > 0) {
-    return { text: event.text, mode: 'append' };
+    return { text: collapseExactTextRepeats(event.text), mode: 'append' };
   }
 
   return {};

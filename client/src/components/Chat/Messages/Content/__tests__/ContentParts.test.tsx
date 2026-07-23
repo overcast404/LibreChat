@@ -63,9 +63,13 @@ jest.mock('../Container', () => ({
 
 jest.mock('../Part', () => ({
   __esModule: true,
-  default: ({ part }: { part: TMessageContentParts }) => (
-    <div data-testid={`real-part-${part.type}`} />
-  ),
+  default: ({ part }: { part: TMessageContentParts }) => {
+    let text = '';
+    if (part.type === 'text') {
+      text = typeof part.text === 'string' ? part.text : (part.text?.value ?? '');
+    }
+    return <div data-testid={`real-part-${part.type}`}>{text}</div>;
+  },
 }));
 
 jest.mock('../ParallelContent', () => ({
@@ -309,6 +313,53 @@ describe('ContentParts — Echo process activity', () => {
     expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`)).toBeTruthy();
     expect(screen.queryByTestId(`real-part-${ContentTypes.THINK}`)).toBeNull();
     expect(screen.queryByTestId(`real-part-${ContentTypes.TOOL_CALL}`)).toBeNull();
+  });
+
+  it('normalizes repeated text in persisted Echo answers', () => {
+    const answer = '嗨！我是齐小光😊，产线运营专家，专精生产时序数据解读。有什么可以帮你的吗？';
+    const content: TMessageContentParts[] = [
+      {
+        type: ContentTypes.TEXT,
+        text: answer + answer + answer,
+        ...echoMetadata('answer'),
+      } as unknown as TMessageContentParts,
+    ];
+
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting={false}
+        isLatestMessage={false}
+        content={content}
+      />,
+    );
+
+    expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`).textContent).toBe(answer);
+  });
+
+  it('normalizes persisted Echo answers separated by a hidden summary comment', () => {
+    const answer =
+      '太好了！现在数据全部齐了！这是完整的产线节拍分析报告，包含白班、夜班和最终达标结论。';
+    const content: TMessageContentParts[] = [
+      {
+        type: ContentTypes.TEXT,
+        text: `${answer}\n\n<!-- ⟦ 节拍分析摘要 ⟧ -->${answer}${answer}`,
+        ...echoMetadata('answer'),
+      } as unknown as TMessageContentParts,
+    ];
+
+    render(
+      <ContentParts
+        {...baseProps}
+        endpoint="QwenPaw"
+        isSubmitting={false}
+        isLatestMessage={false}
+        content={content}
+      />,
+    );
+
+    expect(screen.getByTestId(`real-part-${ContentTypes.TEXT}`).textContent).toBe(answer);
   });
 
   it('folds all non-answer Echo parts even when process parts arrive after the answer', () => {

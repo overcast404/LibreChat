@@ -1184,6 +1184,53 @@ describe('useStepHandler', () => {
       );
     });
 
+    it('should replace Echo text snapshots instead of concatenating them', () => {
+      const responseMessage = createResponseMessage();
+      mockGetMessages.mockReturnValue([responseMessage]);
+
+      const { result } = renderHook(() => useStepHandler(createHookParams()));
+      const runStep = createRunStep();
+      const submission = createSubmission();
+      const createEchoSnapshot = (text: string): Agents.MessageDeltaEvent => ({
+        id: 'step-1',
+        delta: {
+          content: [
+            {
+              type: ContentTypes.TEXT,
+              text,
+              echo_copaw: { source: 'echo-copaw', phase: 'answer', kind: 'message' },
+            } as unknown as TMessageContentParts,
+          ],
+        },
+      });
+
+      act(() => {
+        result.current.stepHandler({ event: StepEvents.ON_RUN_STEP, data: runStep }, submission);
+      });
+      act(() => {
+        result.current.stepHandler(
+          { event: StepEvents.ON_MESSAGE_DELTA, data: createEchoSnapshot('Hello') },
+          submission,
+        );
+      });
+      act(() => {
+        result.current.stepHandler(
+          { event: StepEvents.ON_MESSAGE_DELTA, data: createEchoSnapshot('Hello World') },
+          submission,
+        );
+      });
+
+      const lastCall = mockSetMessages.mock.calls[mockSetMessages.mock.calls.length - 1][0];
+      const responseMsg = lastCall[lastCall.length - 1];
+      expect(responseMsg.content).toContainEqual(
+        expect.objectContaining({
+          type: ContentTypes.TEXT,
+          text: 'Hello World',
+          echo_copaw: expect.objectContaining({ source: 'echo-copaw', phase: 'answer' }),
+        }),
+      );
+    });
+
     it('should return early when contentPart is null', () => {
       const responseMessage = createResponseMessage();
       mockGetMessages.mockReturnValue([responseMessage]);
@@ -1295,6 +1342,53 @@ describe('useStepHandler', () => {
       const responseMsg = lastCall[lastCall.length - 1];
       expect(responseMsg.content).toContainEqual(
         expect.objectContaining({ type: ContentTypes.THINK, think: 'First thought' }),
+      );
+    });
+
+    it('should replace Echo reasoning snapshots instead of concatenating them', () => {
+      const responseMessage = createResponseMessage();
+      mockGetMessages.mockReturnValue([responseMessage]);
+
+      const { result } = renderHook(() => useStepHandler(createHookParams()));
+      const runStep = createRunStep();
+      const submission = createSubmission();
+      const createEchoSnapshot = (think: string): Agents.ReasoningDeltaEvent => ({
+        id: 'step-1',
+        delta: {
+          content: [
+            {
+              type: ContentTypes.THINK,
+              think,
+              echo_copaw: { source: 'echo-copaw', phase: 'process', kind: 'reasoning' },
+            } as unknown as TMessageContentParts,
+          ],
+        },
+      });
+
+      act(() => {
+        result.current.stepHandler({ event: StepEvents.ON_RUN_STEP, data: runStep }, submission);
+      });
+      act(() => {
+        result.current.stepHandler(
+          { event: StepEvents.ON_REASONING_DELTA, data: createEchoSnapshot('First') },
+          submission,
+        );
+      });
+      act(() => {
+        result.current.stepHandler(
+          { event: StepEvents.ON_REASONING_DELTA, data: createEchoSnapshot('First thought') },
+          submission,
+        );
+      });
+
+      const lastCall = mockSetMessages.mock.calls[mockSetMessages.mock.calls.length - 1][0];
+      const responseMsg = lastCall[lastCall.length - 1];
+      expect(responseMsg.content).toContainEqual(
+        expect.objectContaining({
+          type: ContentTypes.THINK,
+          think: 'First thought',
+          echo_copaw: expect.objectContaining({ source: 'echo-copaw', phase: 'process' }),
+        }),
       );
     });
   });

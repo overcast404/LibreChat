@@ -87,6 +87,10 @@ function preserveEchoCoPawMetadata<T extends Record<string, unknown>>(
   return target;
 }
 
+function isEchoCoPawSnapshot(contentPart: unknown): boolean {
+  return getEchoCoPawMetadata(contentPart) != null;
+}
+
 type AllContentTypes =
   | ContentTypes.TEXT
   | ContentTypes.THINK
@@ -388,10 +392,13 @@ export default function useStepHandler({
       typeof contentPart.text === 'string'
     ) {
       const currentContent = updatedContent[index] as MessageDeltaUpdate;
+      const text = isEchoCoPawSnapshot(contentPart)
+        ? contentPart.text
+        : (currentContent.text || '') + contentPart.text;
       const update = preserveEchoCoPawMetadata(
         {
           type: ContentTypes.TEXT,
-          text: (currentContent.text || '') + contentPart.text,
+          text,
         },
         contentPart,
         currentContent,
@@ -418,10 +425,13 @@ export default function useStepHandler({
       typeof contentPart.think === 'string'
     ) {
       const currentContent = updatedContent[index] as ReasoningDeltaUpdate;
+      const think = isEchoCoPawSnapshot(contentPart)
+        ? contentPart.think
+        : (currentContent.think || '') + contentPart.think;
       const update = preserveEchoCoPawMetadata(
         {
           type: ContentTypes.THINK,
-          think: (currentContent.think || '') + contentPart.think,
+          think,
         },
         contentPart,
         currentContent,
@@ -449,6 +459,7 @@ export default function useStepHandler({
       const toolCallArgs = (contentPart.tool_call as Agents.ToolCall).args;
       /** When args are a valid object, they are likely already invoked */
       let args =
+        isEchoCoPawSnapshot(contentPart) ||
         finalUpdate ||
         typeof existingToolCall?.args === 'object' ||
         typeof toolCallArgs === 'object'

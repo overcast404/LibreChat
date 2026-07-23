@@ -29,6 +29,8 @@ const isToolAnchorPart = (part: TMessageContentParts): boolean =>
 
 const ECHO_HISTORY_TITLE = '过程记录';
 const ECHO_HISTORY_SUMMARY_SUFFIX = '段已折叠';
+const MIN_ECHO_REPEAT_LENGTH = 16;
+const ECHO_HIDDEN_COMMENT_PATTERN = /<!--[\s\S]*?-->/g;
 
 const normalizeEchoIdentifier = (value?: string | null): string =>
   String(value ?? '')
@@ -79,6 +81,54 @@ const getTextPartValue = (part: TMessageContentParts): string | null => {
     return null;
   }
   return typeof part.text === 'string' ? part.text : (part.text?.value ?? '');
+};
+
+const collapseExactEchoTextRepeats = (text: string): string => {
+  if (text.length < MIN_ECHO_REPEAT_LENGTH * 2) {
+    return text;
+  }
+
+  const comparable = text.replace(ECHO_HIDDEN_COMMENT_PATTERN, '').trim();
+  if (comparable.length < MIN_ECHO_REPEAT_LENGTH * 2) {
+    return text;
+  }
+
+  const anchor = comparable.slice(0, MIN_ECHO_REPEAT_LENGTH);
+  let repeatStart = comparable.indexOf(anchor, MIN_ECHO_REPEAT_LENGTH);
+
+  while (repeatStart >= MIN_ECHO_REPEAT_LENGTH) {
+    const firstCopy = comparable.slice(0, repeatStart).trimEnd();
+    let cursor = repeatStart;
+    let repeatCount = 1;
+
+    while (cursor < comparable.length) {
+      while (/\s/.test(comparable[cursor] ?? '')) {
+        cursor += 1;
+      }
+      if (!comparable.startsWith(firstCopy, cursor)) {
+        break;
+      }
+      repeatCount += 1;
+      cursor += firstCopy.length;
+    }
+
+    if (repeatCount > 1 && comparable.slice(cursor).trim().length === 0) {
+      return firstCopy;
+    }
+
+    repeatStart = comparable.indexOf(anchor, repeatStart + 1);
+  }
+
+  return text;
+};
+
+const normalizePersistedEchoTextPart = (part: TMessageContentParts): TMessageContentParts => {
+  if (!isEchoCoPawPart(part) || part.type !== ContentTypes.TEXT || typeof part.text !== 'string') {
+    return part;
+  }
+
+  const text = collapseExactEchoTextRepeats(part.text);
+  return text === part.text ? part : ({ ...part, text } as TMessageContentParts);
 };
 
 const isBlankTextPart = (part: TMessageContentParts): boolean => {
@@ -455,7 +505,10 @@ const ContentParts = memo(function ContentParts({
     [sequentialParts, attachmentMap, fallbackScope],
   );
 
-  const safeContent = useMemo(() => content ?? [], [content]);
+  const safeContent = useMemo(
+    () => (content ?? []).map((part) => (part ? normalizePersistedEchoTextPart(part) : part)),
+    [content],
+  );
   const showEmptyCursor = safeContent.length === 0 && effectiveIsSubmitting;
   const lastContentIdx = safeContent.length - 1;
   const hasEchoContent =
